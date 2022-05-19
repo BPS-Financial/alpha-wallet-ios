@@ -127,7 +127,7 @@ struct AssetAttribute {
 
     private static func getContract(fromEthereumFunctionElement ethereumFunctionElement: XMLElement, forTokenContract contract: AlphaWallet.Address, server: RPCServerOrAny, contractNamesAndAddresses: [String: [(AlphaWallet.Address, RPCServer)]]) -> AlphaWallet.Address? {
         if let functionOriginContractName = ethereumFunctionElement["contract"].nilIfEmpty {
-            return XMLHandler.getNonTokenHoldingContract(byName: functionOriginContractName, server: server, fromContractNamesAndAddresses: contractNamesAndAddresses)
+            return XMLHandler.functional.getNonTokenHoldingContract(byName: functionOriginContractName, server: server, fromContractNamesAndAddresses: contractNamesAndAddresses)
         } else {
             //TODO falling back to the token contract should only be for activity cards
             return contract
@@ -165,9 +165,7 @@ extension Dictionary where Key == AttributeId, Value == AssetAttribute {
     func resolve(withTokenIdOrEvent tokenIdOrEvent: TokenIdOrEvent, userEntryValues: [AttributeId: String], server: RPCServer, account: Wallet, additionalValues: [AttributeId: AssetAttributeSyntaxValue], localRefs: [AttributeId: AssetInternalValue]) -> [AttributeId: AssetAttributeSyntaxValue] {
         var attributeNameValues = [AttributeId: AssetAttributeSyntaxValue]()
         let (tokenIdBased, userEntryBased, functionBased, eventBased) = splitAttributesByOrigin
-        guard let callForAssetAttributeCoordinator = XMLHandler.callForAssetAttributeCoordinators?[server] else {
-            return [:]
-        }
+        let callForAssetAttributeCoordinator = XMLHandler.callForAssetAttributeCoordinator
         for (attributeId, attribute) in tokenIdBased {
             let value = attribute.value(from: tokenIdOrEvent, inWallet: account, server: server, callForAssetAttributeCoordinator: callForAssetAttributeCoordinator, userEntryValues: userEntryValues, tokenLevelNonSubscribableAttributesAndValues: .init(), localRefs: localRefs)
             attributeNameValues[attributeId] = value

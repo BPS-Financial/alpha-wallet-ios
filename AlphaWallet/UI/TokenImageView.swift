@@ -34,7 +34,7 @@ class TokenImageView: UIView {
         return label
     }()
     private lazy var imageView: WebImageView = {
-        let imageView = WebImageView(scale: scale, align: align)
+        let imageView = WebImageView()
         return imageView
     }()
     private lazy var chainOverlayImageView: UIImageView = {
@@ -42,20 +42,20 @@ class TokenImageView: UIView {
         return imageView
     }()
 
-    private var tokenImagePlaceholder: UIImage? {
+    private var tokenImagePlaceholder: UIImage? = {
         return R.image.tokenPlaceholderLarge()
-    }
+    }()
 
     var isChainOverlayHidden: Bool = false {
-        didSet {
-            chainOverlayImageView.isHidden = isChainOverlayHidden
-        }
+        didSet { chainOverlayImageView.isHidden = isChainOverlayHidden }
+    }
+
+    var isSymbolLabelHidden: Bool = false {
+        didSet { symbolLabel.isHidden = isSymbolLabelHidden }
     }
     
     var isRoundingEnabled: Bool = true {
-        didSet {
-            self.layoutIfNeeded()
-        }
+        didSet { self.layoutIfNeeded() }
     }
 
     var subscribable: Subscribable<TokenImage>? {
@@ -90,12 +90,12 @@ class TokenImageView: UIView {
             }
         }
     }
-    private let scale: WebImageView.Scale
-    private let align: WebImageView.Align
 
-    init(edgeInsets: UIEdgeInsets = .zero, scale: WebImageView.Scale = .bestFitDown, align: WebImageView.Align = .center) {
-        self.scale = scale
-        self.align = align
+    override var contentMode: UIView.ContentMode {
+        didSet { imageView.contentMode = contentMode }
+    }
+
+    init(edgeInsets: UIEdgeInsets = .zero) {
         super.init(frame: .zero)
 
         imageView.translatesAutoresizingMaskIntoConstraints = false

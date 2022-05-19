@@ -6,6 +6,7 @@
 //
 
 import UIKit
+import Combine
 
 protocol EditPriceAlertViewControllerDelegate: class {
     func didUpdateAlert(in viewController: EditPriceAlertViewController)
@@ -39,7 +40,7 @@ class EditPriceAlertViewController: UIViewController {
         return view
     }()
 
-    private let buttonsBar = ButtonsBar(configuration: .primary(buttons: 1))
+    private let buttonsBar = HorizontalButtonsBar(configuration: .primary(buttons: 1))
     private lazy var containerView: ScrollableStackView = {
         let view = ScrollableStackView()
         return view
@@ -47,8 +48,8 @@ class EditPriceAlertViewController: UIViewController {
 
     private var viewModel: EditPriceAlertViewModel
     private let session: WalletSession
-    private var subscription: Subscribable<BalanceBaseViewModel>.SubscribableKey?
     private let alertService: PriceAlertServiceType
+    private var cancelable = Set<AnyCancellable>()
 
     weak var delegate: EditPriceAlertViewControllerDelegate?
 
@@ -84,19 +85,25 @@ class EditPriceAlertViewController: UIViewController {
 
         switch viewModel.tokenObject.type {
         case .nativeCryptocurrency:
-            subscription = session.balanceCoordinator.subscribableEthBalanceViewModel.subscribe { [weak self] viewModel in
-                guard let strongSelf = self else { return }
+            session.tokenBalanceService
+                .etherToFiatRatePublisher
+                .receive(on: RunLoop.main)
+                .sink { [weak self] price in
+                    guard let strongSelf = self else { return }
 
-                strongSelf.viewModel.set(marketPrice: viewModel?.ticker?.price_usd)
-                strongSelf.configure(viewModel: strongSelf.viewModel)
-            }
+                    strongSelf.viewModel.set(marketPrice: price)
+                    strongSelf.configure(viewModel: strongSelf.viewModel)
+                }.store(in: &cancelable)
         case .erc20:
-            subscription = session.balanceCoordinator.subscribableTokenBalance(viewModel.tokenObject.addressAndRPCServer).subscribe { [weak self] viewModel in
-                guard let strongSelf = self else { return }
+            session.tokenBalanceService
+                .tokenBalancePublisher(viewModel.tokenObject.addressAndRPCServer)
+                .receive(on: RunLoop.main)
+                .sink { [weak self] viewModel in
+                    guard let strongSelf = self else { return }
 
-                strongSelf.viewModel.set(marketPrice: viewModel?.ticker?.price_usd)
-                strongSelf.configure(viewModel: strongSelf.viewModel)
-            }
+                    strongSelf.viewModel.set(marketPrice: viewModel?.ticker?.price_usd)
+                    strongSelf.configure(viewModel: strongSelf.viewModel)
+                }.store(in: &cancelable)
         case .erc875, .erc721, .erc721ForTickets, .erc1155:
             break
         }
@@ -131,14 +138,12 @@ class EditPriceAlertViewController: UIViewController {
         switch viewModel.configuration {
         case .create:
             let alert: PriceAlert = .init(type: .init(value: value.doubleValue, marketPrice: marketPrice), tokenObject: viewModel.tokenObject, isEnabled: true)
-            alertService.add(alert: alert).done { _ in
-                self.delegate?.didUpdateAlert(in: self)
-            }.cauterize()
+            alertService.add(alert: alert)
         case .edit(let alert):
-            alertService.update(alert: alert, update: .value(value: value.doubleValue, marketPrice: marketPrice)).done { _ in
-                self.delegate?.didUpdateAlert(in: self)
-            }.cauterize()
+            alertService.update(alert: alert, update: .value(value: value.doubleValue, marketPrice: marketPrice))
         }
+
+        delegate?.didUpdateAlert(in: self)
     }
 
     required init?(coder: NSCoder) {

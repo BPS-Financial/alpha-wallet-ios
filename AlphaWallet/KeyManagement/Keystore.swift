@@ -22,10 +22,9 @@ protocol Keystore {
     var hasMigratedFromKeystoreFiles: Bool { get }
     var hasWallets: Bool { get }
     var isUserPresenceCheckPossible: Bool { get }
-    var subscribableWallets: Subscribable<Set<Wallet>> { get }
     var wallets: [Wallet] { get }
     var recentlyUsedWallet: Wallet? { get set }
-    var currentWallet: Wallet { get }
+    var currentWallet: Wallet? { get }
 
     func createAccount(completion: @escaping (Result<AlphaWallet.Address, KeystoreError>) -> Void)
     func importWallet(type: ImportType, completion: @escaping (Result<Wallet, KeystoreError>) -> Void)

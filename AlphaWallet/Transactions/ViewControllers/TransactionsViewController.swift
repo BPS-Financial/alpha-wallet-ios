@@ -14,13 +14,13 @@ class TransactionsViewController: UIViewController {
     private var viewModel: TransactionsViewModel
     private let tableView = UITableView(frame: .zero, style: .grouped)
     private let refreshControl = UIRefreshControl()
-    private let dataCoordinator: TransactionDataCoordinator
+    private let dataCoordinator: TransactionsService
     private let sessions: ServerDictionary<WalletSession>
 
     weak var delegate: TransactionsViewControllerDelegate?
 
     init(
-        dataCoordinator: TransactionDataCoordinator,
+        dataCoordinator: TransactionsService,
         sessions: ServerDictionary<WalletSession>,
         viewModel: TransactionsViewModel
     ) {
@@ -39,7 +39,7 @@ class TransactionsViewController: UIViewController {
         tableView.dataSource = self
         tableView.separatorStyle = .singleLine
         tableView.backgroundColor = viewModel.backgroundColor
-        tableView.estimatedRowHeight = TokensCardViewController.anArbitraryRowHeightSoAutoSizingCellsWorkIniOS10
+        tableView.estimatedRowHeight = Metrics.anArbitraryRowHeightSoAutoSizingCellsWorkIniOS10
         view.addSubview(tableView)
 
         NSLayoutConstraint.activate([
@@ -141,7 +141,7 @@ extension TransactionsViewController: UITableViewDataSource {
         let transactionRow = viewModel.item(for: indexPath.row, section: indexPath.section)
         let cell: TransactionViewCell = tableView.dequeueReusableCell(for: indexPath)
         let session = sessions[transactionRow.server]
-        let viewModel: TransactionRowCellViewModel = .init(transactionRow: transactionRow, chainState: session.chainState, currentWallet: session.account, server: transactionRow.server)
+        let viewModel: TransactionRowCellViewModel = .init(transactionRow: transactionRow, chainState: session.chainState, wallet: session.account, server: transactionRow.server)
         cell.configure(viewModel: viewModel)
 
         return cell

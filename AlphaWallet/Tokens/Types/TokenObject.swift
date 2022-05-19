@@ -1,6 +1,7 @@
 // Copyright SIX DAY LLC. All rights reserved.
 
 import Foundation
+import AlphaWalletOpenSea
 import RealmSwift
 import BigInt
 
@@ -56,6 +57,19 @@ extension Activity {
             return .init(address: contractAddress, server: server)
         }
 
+        init() {
+            name = ""
+            primaryKey = ""
+            server = .main
+            contractAddress = Constants.nullAddress
+            symbol = ""
+            decimals = 0
+            type = .nativeCryptocurrency
+            shouldDisplay = false
+            sortIndex = nil
+            balance = .value(0)
+        }
+
         init(tokenObject: TokenObject) {
             name = tokenObject.name
             primaryKey = tokenObject.primaryKey
@@ -72,7 +86,7 @@ extension Activity {
                 let fullValue = EtherNumberFormatter.plain.string(from: tokenObject.valueBigInt, decimals: decimals)
                 balance = .value(fullValue.optionalDecimalValue)
             case .erc721, .erc721ForTickets, .erc875, .erc1155:
-                balance = .nftBalance(tokenObject.balance.compactMap { $0.nonFungibleBalance })
+                balance = .nftBalance(tokenObject.balance.toArray().compactMap { $0.nonFungibleBalance })
             }
         }
 
@@ -152,6 +166,7 @@ class TokenObject: Object {
     @objc dynamic var rawType: String = TokenType.erc20.rawValue
     @objc dynamic var shouldDisplay: Bool = true
     var sortIndex = RealmOptional<Int>()
+    //NOTE: Refactor with renaming to nft balance or something similar
     let balance = List<TokenBalance>()
 
     var nonZeroBalance: [TokenBalance] {
@@ -221,6 +236,15 @@ class TokenObject: Object {
         return title(withAssetDefinitionStore: assetDefinitionStore, localizedNameFromAssetDefinition: localizedNameFromAssetDefinition, symbol: symbol)
     }
 
+    func titleInPluralForm(withAssetDefinitionStore assetDefinitionStore: AssetDefinitionStore, eventsDataStore: NonActivityEventsDataStore, forWallet wallet: Wallet) -> String? {
+        if let tokenHolders = getTokenHolders(assetDefinitionStore: assetDefinitionStore, eventsDataStore: eventsDataStore, forWallet: wallet).first {
+            guard let name = tokenHolders.tokens.first?.values.collectionValue?.name, name.nonEmpty else { return nil }
+            return name
+        } else {
+            return nil
+        }
+    }
+
     func titleInPluralForm(withAssetDefinitionStore assetDefinitionStore: AssetDefinitionStore) -> String {
         let localizedNameFromAssetDefinition = XMLHandler(token: self, assetDefinitionStore: assetDefinitionStore).getNameInPluralForm(fallback: name)
         return title(withAssetDefinitionStore: assetDefinitionStore, localizedNameFromAssetDefinition: localizedNameFromAssetDefinition, symbol: symbol)
@@ -253,6 +277,55 @@ class TokenObject: Object {
 //    When picking *2 (short name):
 //
 //    Use shortest of name and symbol, but abbreviate to 5 characters or less and capitalise.
+
+    func shortTitleInPluralForm(withAssetDefinitionStore assetDefinitionStore: AssetDefinitionStore, eventsDataStore: NonActivityEventsDataStore, forWallet wallet: Wallet) -> String {
+        func compositeTokenNameAndSymbol(symbol: String, name: String) -> String {
+            let daiSymbol = "DAI\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}"
+            //We could have just trimmed away all trailing \0, but this is faster and safer since only DAI seems to have this problem
+            if daiSymbol == symbol {
+                return "\(value) (DAI)".uppercased()
+            } else {
+                return "\(value) (\(symbol))".uppercased()
+            }
+        }
+        let xmlHandler = XMLHandler(token: self, assetDefinitionStore: assetDefinitionStore)
+
+        func _compositeTokenName(fallback: String = "") -> String {
+            let localizedNameFromAssetDefinition = xmlHandler.getNameInPluralForm(fallback: fallback)
+            return compositeTokenName(forContract: contractAddress, fromContractName: name, localizedNameFromAssetDefinition: localizedNameFromAssetDefinition)
+        }
+
+        let localizedNameFromAssetDefinition = _compositeTokenName()
+        let symbol = self.symbol(withAssetDefinitionStore: assetDefinitionStore, localizedNameFromAssetDefinition: localizedNameFromAssetDefinition)
+
+        if localizedNameFromAssetDefinition.isEmpty {
+            if let name = titleInPluralForm(withAssetDefinitionStore: assetDefinitionStore, eventsDataStore: eventsDataStore, forWallet: wallet) {
+                return name
+            } else {
+                let tokenName = _compositeTokenName(fallback: name)
+
+                if tokenName.isEmpty {
+                    return symbol
+                } else if tokenName.count > symbol.count {
+                    if symbol.isEmpty {
+                        return tokenName
+                    } else {
+                        return symbol
+                    }
+                } else {
+                    //some-imas asd -> someimas asd
+                    let acronym = tokenName.components(separatedBy: CharacterSet.alphanumerics.inverted).joined(separator: "").getAcronyms()
+                    if acronym.isEmpty || acronym.count == 1 {
+                        return symbol.isEmpty ? tokenName : symbol
+                    } else {
+                        return compositeTokenNameAndSymbol(symbol: symbol, name: acronym.joined(separator: ""))
+                    }
+                }
+            }
+        } else {
+            return localizedNameFromAssetDefinition
+        }
+    }
 
     func shortTitleInPluralForm(withAssetDefinitionStore assetDefinitionStore: AssetDefinitionStore) -> String {
         func compositeTokenNameAndSymbol(symbol: String, name: String) -> String {
@@ -373,16 +446,4 @@ func compositeTokenName(forContract contract: AlphaWallet.Address, fromContractN
         compositeName = localizedNameFromAssetDefinition
     }
     return compositeName
-}
-
-extension Wallet {
-    class functional {}
-}
-
-extension Wallet.functional {
-    static func realm(forAccount account: Wallet) -> Realm {
-        let migration = MigrationInitializer(account: account)
-        migration.perform()
-        return try! Realm(configuration: migration.config)
-    }
 }

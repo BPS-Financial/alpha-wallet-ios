@@ -13,7 +13,7 @@ class ChooseTokenCardTransferModeViewController: UIViewController, TokenVerifiab
     private let roundedBackground = RoundedBackground()
     private let header = TokensCardViewControllerTitleHeader()
     private let tokenRowView: TokenRowView & UIView
-    private let buttonsBar = ButtonsBar(configuration: .primary(buttons: 2))
+    private let buttonsBar = HorizontalButtonsBar(configuration: .primary(buttons: 2))
     private var viewModel: ChooseTokenCardTransferModeViewControllerViewModel
     private let analyticsCoordinator: AnalyticsCoordinator
     private let tokenHolder: TokenHolder
@@ -34,7 +34,8 @@ class ChooseTokenCardTransferModeViewController: UIViewController, TokenVerifiab
             paymentFlow: PaymentFlow,
             viewModel: ChooseTokenCardTransferModeViewControllerViewModel,
             assetDefinitionStore: AssetDefinitionStore,
-            keystore: Keystore
+            keystore: Keystore,
+            session: WalletSession
     ) {
         self.analyticsCoordinator = analyticsCoordinator
         self.tokenHolder = tokenHolder
@@ -47,7 +48,7 @@ class ChooseTokenCardTransferModeViewController: UIViewController, TokenVerifiab
         case .backedByOpenSea:
             tokenRowView = OpenSeaNonFungibleTokenCardRowView(tokenView: .viewIconified)
         case .notBackedByOpenSea:
-            tokenRowView = TokenCardRowView(analyticsCoordinator: analyticsCoordinator, server: viewModel.token.server, tokenView: .viewIconified, assetDefinitionStore: assetDefinitionStore, keystore: keystore, wallet: keystore.currentWallet)
+            tokenRowView = TokenCardRowView(analyticsCoordinator: analyticsCoordinator, server: viewModel.token.server, tokenView: .viewIconified, assetDefinitionStore: assetDefinitionStore, keystore: keystore, wallet: session.account)
         }
 
         super.init(nibName: nil, bundle: nil)
@@ -87,11 +88,11 @@ class ChooseTokenCardTransferModeViewController: UIViewController, TokenVerifiab
             buttonsBar.leadingAnchor.constraint(equalTo: footerBar.leadingAnchor),
             buttonsBar.trailingAnchor.constraint(equalTo: footerBar.trailingAnchor),
             buttonsBar.topAnchor.constraint(equalTo: footerBar.topAnchor),
-            buttonsBar.heightAnchor.constraint(equalToConstant: ButtonsBar.buttonsHeight),
+            buttonsBar.heightAnchor.constraint(equalToConstant: HorizontalButtonsBar.buttonsHeight),
 
             footerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            footerBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -ButtonsBar.buttonsHeight - ButtonsBar.marginAtBottomScreen),
+            footerBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -HorizontalButtonsBar.buttonsHeight - HorizontalButtonsBar.marginAtBottomScreen),
             footerBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ] + roundedBackground.createConstraintsWithContainer(view: view))
     }

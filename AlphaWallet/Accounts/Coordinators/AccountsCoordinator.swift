@@ -8,6 +8,7 @@ protocol AccountsCoordinatorDelegate: AnyObject {
     func didSelectAccount(account: Wallet, in coordinator: AccountsCoordinator)
     func didAddAccount(account: Wallet, in coordinator: AccountsCoordinator)
     func didDeleteAccount(account: Wallet, in coordinator: AccountsCoordinator)
+    func didFinishBackup(account: AlphaWallet.Address, in coordinator: AccountsCoordinator)
 }
 
 struct AccountsCoordinatorViewModel {
@@ -46,15 +47,16 @@ class AccountsCoordinator: Coordinator {
 
     private let config: Config
     private let keystore: Keystore
-    var promptBackupCoordinator: PromptBackupCoordinator?
     private let analyticsCoordinator: AnalyticsCoordinator
-    private let walletBalanceCoordinator: WalletBalanceCoordinatorType
+    private let walletBalanceService: WalletBalanceService
     let navigationController: UINavigationController
     var coordinators: [Coordinator] = []
 
     lazy var accountsViewController: AccountsViewController = {
-        let viewModel = AccountsViewModel(keystore: keystore, config: config, configuration: self.viewModel.configuration, analyticsCoordinator: analyticsCoordinator)
-        let controller = AccountsViewController(config: config, keystore: keystore, viewModel: viewModel, walletBalanceCoordinator: walletBalanceCoordinator, analyticsCoordinator: analyticsCoordinator)
+        let viewModel = AccountsViewModel(keystore: keystore, config: config, configuration: self.viewModel.configuration, analyticsCoordinator: analyticsCoordinator, walletBalanceService: walletBalanceService)
+        viewModel.allowsAccountDeletion = self.viewModel.configuration.allowsAccountDeletion
+
+        let controller = AccountsViewController(viewModel: viewModel)
         switch self.viewModel.configuration.hidesBackButton {
         case true:
             controller.navigationItem.hidesBackButton = true
@@ -63,7 +65,6 @@ class AccountsCoordinator: Coordinator {
         }
 
         controller.navigationItem.rightBarButtonItem = UIBarButtonItem.addButton(self, selector: #selector(addWallet))
-        controller.allowsAccountDeletion = self.viewModel.configuration.allowsAccountDeletion
         controller.delegate = self
         controller.hidesBottomBarWhenPushed = true
 
@@ -77,18 +78,16 @@ class AccountsCoordinator: Coordinator {
         config: Config,
         navigationController: UINavigationController,
         keystore: Keystore,
-        promptBackupCoordinator: PromptBackupCoordinator?,
         analyticsCoordinator: AnalyticsCoordinator,
         viewModel: AccountsCoordinatorViewModel,
-        walletBalanceCoordinator: WalletBalanceCoordinatorType
+        walletBalanceService: WalletBalanceService
     ) {
         self.config = config
         self.navigationController = navigationController
         self.keystore = keystore
-        self.promptBackupCoordinator = promptBackupCoordinator
         self.analyticsCoordinator = analyticsCoordinator
         self.viewModel = viewModel
-        self.walletBalanceCoordinator = walletBalanceCoordinator
+        self.walletBalanceService = walletBalanceService
     }
 
     func start() {
@@ -168,7 +167,7 @@ class AccountsCoordinator: Coordinator {
                 self?.promptRenameWallet(account)
             }
 
-            if Features.isRenameWalletEnabledWhileLongPress {
+            if Features.default.isAvailable(.isRenameWalletEnabledWhileLongPress) {
                 controller.addAction(renameAction)
             }
 
@@ -215,8 +214,7 @@ class AccountsCoordinator: Coordinator {
             } else {
                 strongSelf.config.saveWalletName(name, forAddress: account)
             }
-
-            strongSelf.accountsViewController.configure(viewModel: .init(keystore: strongSelf.keystore, config: strongSelf.config, configuration: strongSelf.viewModel.configuration, analyticsCoordinator: strongSelf.analyticsCoordinator))
+            strongSelf.accountsViewController.configure()
         }))
 
         alertController.addAction(UIAlertAction(title: R.string.localizable.cancel(), style: .cancel))
@@ -267,7 +265,7 @@ extension AccountsCoordinator: WalletCoordinatorDelegate {
             removeCoordinator(coordinator)
             delegate.didSelectAccount(account: account, in: self)
         } else {
-            accountsViewController.configure(viewModel: .init(keystore: keystore, config: config, configuration: viewModel.configuration, analyticsCoordinator: analyticsCoordinator))
+            accountsViewController.configure()
 
             coordinator.navigationController.dismiss(animated: true)
             removeCoordinator(coordinator)
@@ -292,11 +290,8 @@ extension AccountsCoordinator: BackupCoordinatorDelegate {
     }
 
     func didFinish(account: AlphaWallet.Address, in coordinator: BackupCoordinator) {
-        if let coordinator = promptBackupCoordinator {
-            coordinator.markBackupDone()
-            coordinator.showHideCurrentPrompt()
-        }
-
+        delegate?.didFinishBackup(account: account, in: self)
+        
         removeCoordinator(coordinator)
     }
 }

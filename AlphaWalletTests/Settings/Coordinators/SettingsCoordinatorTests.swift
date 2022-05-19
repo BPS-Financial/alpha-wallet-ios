@@ -2,6 +2,8 @@
 
 import XCTest
 @testable import AlphaWallet
+import PromiseKit
+import Combine
 
 extension ServerDictionary {
     static func make(server: RPCServer = .main) -> ServerDictionary<WalletSession> {
@@ -12,95 +14,84 @@ extension ServerDictionary {
 }
 
 class SettingsCoordinatorTests: XCTestCase {
+    private var removeWalletCancelable: AnyCancellable?
+    private var addWalletCancelable: AnyCancellable?
+
     func testOnDeleteCleanStorage() {
-        class Delegate: SettingsCoordinatorDelegate, CanOpenURL {
-            var deleteDelegateMethodCalled = false
-
-            func didRestart(with account: Wallet, in coordinator: SettingsCoordinator, reason: RestartReason) {}
-            func didUpdateAccounts(in coordinator: SettingsCoordinator) {}
-            func didCancel(in coordinator: SettingsCoordinator) {}
-            func didPressShowWallet(in coordinator: SettingsCoordinator) {}
-            func assetDefinitionsOverrideViewController(for: SettingsCoordinator) -> UIViewController? { return nil }
-            func showConsole(in coordinator: SettingsCoordinator) {}
-            func delete(account: Wallet, in coordinator: SettingsCoordinator) {
-                deleteDelegateMethodCalled = true
-            }
-            func didPressViewContractWebPage(forContract contract: AlphaWallet.Address, server: RPCServer, in viewController: UIViewController) {}
-            func didPressViewContractWebPage(_ url: URL, in viewController: UIViewController) {}
-            func didPressOpenWebPage(_ url: URL, in viewController: UIViewController) {}
-            func restartToReloadServersQueued(in coordinator: SettingsCoordinator) {}
-            func openBlockscanChat(in coordinator: SettingsCoordinator) {}
-        }
-
-        let storage = FakeTransactionsStorage(server: .main)
-        let promptBackupCoordinator = PromptBackupCoordinator(keystore: FakeKeystore(), wallet: .make(), config: .make(), analyticsCoordinator: FakeAnalyticsService())
-        let sessons = ServerDictionary<Any>.make(server: .main)
-
-        let coordinator = SettingsCoordinator(
-            navigationController: FakeNavigationController(),
-            keystore: FakeEtherKeystore(),
-            config: .make(),
-            sessions: sessons,
-            restartQueue: .init(),
-            promptBackupCoordinator: promptBackupCoordinator,
-            analyticsCoordinator: FakeAnalyticsService(),
-            walletConnectCoordinator: .fake(),
-            walletBalanceCoordinator: FakeWalletBalanceCoordinator()
-        )
-        let delegate = Delegate()
-        coordinator.delegate = delegate
+        let wallet: Wallet = .make()
+        let storage = FakeTransactionsStorage(wallet: wallet)
+        var walletAddressesStore = EtherKeystore.migratedWalletAddressesStore(userDefaults: .test)
         storage.add(transactions: [.make()])
 
         XCTAssertEqual(1, storage.transactionCount(forServer: .main))
 
-        let accountCoordinator = AccountsCoordinator(
-            config: .make(),
-            navigationController: FakeNavigationController(),
-            keystore: FakeEtherKeystore(),
-            promptBackupCoordinator: promptBackupCoordinator,
-            analyticsCoordinator: FakeAnalyticsService(),
-            viewModel: .init(configuration: .changeWallets),
-            walletBalanceCoordinator: FakeWalletBalanceCoordinator()
-        )
+        var deletedWallet: Wallet?
+        let expectation = self.expectation(description: "didRemoveWalletPublisher")
 
-        XCTAssertFalse(delegate.deleteDelegateMethodCalled)
-        coordinator.didDeleteAccount(account: .make(), in: accountCoordinator)
-        XCTAssertTrue(delegate.deleteDelegateMethodCalled)
+        removeWalletCancelable = walletAddressesStore
+            .didRemoveWalletPublisher
+            .receive(on: RunLoop.main)
+            .sink { value in
+                deletedWallet = value
+                expectation.fulfill()
+                storage.deleteAllForTestsOnly()
+            }
 
-//        XCTAssertEqual(0, storage.count)
-    }
-}
+        walletAddressesStore.removeAddress(wallet)
 
-import PromiseKit
+        waitForExpectations(timeout: 10)
 
-final class FakeWalletBalanceCoordinator: WalletBalanceCoordinatorType {
-    var subscribableWalletsSummary: Subscribable<WalletSummary> = .init(nil)
-
-    init(config: Config = .make(), account: Wallet = .make()) {
-
+        XCTAssertNotNil(deletedWallet)
+        XCTAssertTrue(wallet.address.sameContract(as: deletedWallet!.address))
+        XCTAssertEqual(0, walletAddressesStore.wallets.count)
+        XCTAssertEqual(0, storage.transactionCount(forServer: .main))
     }
 
-    func subscribableWalletBalance(wallet: Wallet) -> Subscribable<WalletBalance> {
-        return .init(nil)
+    func testDeleteWallet() {
+        var walletAddressesStore = EtherKeystore.migratedWalletAddressesStore(userDefaults: .test)
+
+        let wallet: Wallet = .make()
+        var deletedWallet: Wallet?
+        let expectation = self.expectation(description: "didRemoveWalletPublisher")
+
+        removeWalletCancelable = walletAddressesStore
+            .didRemoveWalletPublisher
+            .receive(on: RunLoop.main)
+            .sink { value in
+                deletedWallet = value
+                expectation.fulfill()
+            }
+
+        walletAddressesStore.removeAddress(wallet)
+
+        waitForExpectations(timeout: 10)
+
+        XCTAssertNotNil(deletedWallet)
+        XCTAssertTrue(wallet.address.sameContract(as: deletedWallet!.address))
+        XCTAssertEqual(0, walletAddressesStore.wallets.count)
     }
 
-    func subscribableTokenBalance(addressAndRPCServer: AddressAndRPCServer) -> Subscribable<BalanceBaseViewModel> {
-        return .init(nil)
-    }
+    func testAddDeleteWallet() {
+        var walletAddressesStore = EtherKeystore.migratedWalletAddressesStore(userDefaults: .test)
 
-    func start() {
+        let wallet: Wallet = .make()
+        var addedAddress: AlphaWallet.Address?
+        let expectation = self.expectation(description: "didAddWalletPublisher")
 
-    }
+        addWalletCancelable = walletAddressesStore
+            .didAddWalletPublisher
+            .receive(on: RunLoop.main)
+            .sink { value in
+                addedAddress = value
+                expectation.fulfill()
+            }
 
-    func refreshBalance() -> Promise<Void> {
-        return .value(())
-    }
+        walletAddressesStore.addToListOfWatchEthereumAddresses(wallet.address)
 
-    func refreshEthBalance() -> Promise<Void> {
-        return .value(())
-    }
+        waitForExpectations(timeout: 10)
 
-    func refreshBalance(updatePolicy: PrivateBalanceFetcher.RefreshBalancePolicy, force: Bool) -> Promise<Void> {
-        return .value(())
+        XCTAssertNotNil(addedAddress)
+        XCTAssertTrue(wallet.address.sameContract(as: addedAddress!))
+        XCTAssertEqual(1, walletAddressesStore.wallets.count)
     }
 }

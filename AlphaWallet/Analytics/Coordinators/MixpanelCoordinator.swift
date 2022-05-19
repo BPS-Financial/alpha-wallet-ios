@@ -13,10 +13,6 @@ class MixpanelCoordinator {
         mixpanelInstance.identify(distinctId: mixpanelInstance.distinctId)
     }
 
-    func add(pushDeviceToken token: Data) {
-        mixpanelInstance.people.addPushDeviceToken(token)
-    }
-
     func convertParameterToSdkSpecificVersion(_ parameter: AnalyticsEventPropertyValue) -> MixpanelType? {
         return parameter.value as? MixpanelType
     }
@@ -31,6 +27,11 @@ extension MixpanelCoordinator: AnalyticsCoordinator {
     func log(action: AnalyticsAction, properties: [String: AnalyticsEventPropertyValue]?) {
         let props: Properties? = properties?.compactMapValues(convertParameterToSdkSpecificVersion)
         mixpanelInstance.track(event: action.rawValue, properties: props)
+    }
+
+    func log(stat: AnalyticsStat, properties: [String: AnalyticsEventPropertyValue]?) {
+        let props: Properties? = properties?.compactMapValues(convertParameterToSdkSpecificVersion)
+        mixpanelInstance.track(event: stat.rawValue, properties: props)
     }
 
     func log(error: AnalyticsError, properties: [String: AnalyticsEventPropertyValue]?) {

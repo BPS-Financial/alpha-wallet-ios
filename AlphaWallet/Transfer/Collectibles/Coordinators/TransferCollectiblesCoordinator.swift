@@ -25,11 +25,11 @@ class TransferCollectiblesCoordinator: Coordinator {
     private let keystore: Keystore
     private let tokenObject: TokenObject
     private let session: WalletSession
-    private let ethPrice: Subscribable<Double>
     private let assetDefinitionStore: AssetDefinitionStore
     private let analyticsCoordinator: AnalyticsCoordinator
     private let filteredTokenHolders: [TokenHolder]
     private var transactionConfirmationResult: ConfirmResult? = .none
+    private var lastViewControllerInNavigationStack: UIViewController?
     
     weak var delegate: TransferCollectiblesCoordinatorDelegate?
     let navigationController: UINavigationController
@@ -40,7 +40,6 @@ class TransferCollectiblesCoordinator: Coordinator {
             navigationController: UINavigationController,
             keystore: Keystore,
             filteredTokenHolders: [TokenHolder],
-            ethPrice: Subscribable<Double>,
             tokenObject: TokenObject,
             assetDefinitionStore: AssetDefinitionStore,
             analyticsCoordinator: AnalyticsCoordinator
@@ -49,11 +48,11 @@ class TransferCollectiblesCoordinator: Coordinator {
         self.session = session
         self.keystore = keystore
         self.navigationController = navigationController
-        self.ethPrice = ethPrice
         self.tokenObject = tokenObject
         self.assetDefinitionStore = assetDefinitionStore
         self.analyticsCoordinator = analyticsCoordinator
         navigationController.navigationBar.isTranslucent = false
+        self.lastViewControllerInNavigationStack = navigationController.viewControllers.last
     }
 
     func start() {
@@ -116,7 +115,7 @@ extension TransferCollectiblesCoordinator: TransferTokenBatchCardsViaWalletAddre
                 tokenIdsAndValues: tokenIdsAndValues
         )
 
-        let configuration: TransactionConfirmationConfiguration = .sendNftTransaction(confirmType: .signThenSend, keystore: keystore, ethPrice: ethPrice, tokenInstanceNames: tokenInstanceNames)
+        let configuration: TransactionConfirmationConfiguration = .sendNftTransaction(confirmType: .signThenSend, keystore: keystore, tokenInstanceNames: tokenInstanceNames)
         let coordinator = TransactionConfirmationCoordinator(presentingViewController: navigationController, session: session, transaction: transaction, configuration: configuration, analyticsCoordinator: analyticsCoordinator)
         addCoordinator(coordinator)
         coordinator.delegate = self
@@ -147,8 +146,9 @@ extension TransferCollectiblesCoordinator: ScanQRCodeCoordinatorDelegate {
 
 extension TransferCollectiblesCoordinator: TransactionConfirmationCoordinatorDelegate {
     func coordinator(_ coordinator: TransactionConfirmationCoordinator, didFailTransaction error: AnyError) {
-        //TODO improve error message. Several of this delegate func
-        coordinator.navigationController.displayError(message: error.localizedDescription)
+        UIApplication.shared
+            .presentedViewController(or: navigationController)
+            .displayError(message: error.localizedDescription)
     }
 
     func didClose(in coordinator: TransactionConfirmationCoordinator) {
@@ -179,10 +179,12 @@ extension TransferCollectiblesCoordinator: TransactionConfirmationCoordinatorDel
 }
 
 extension TransferCollectiblesCoordinator: TransactionInProgressCoordinatorDelegate {
-    func transactionInProgressDidDismiss(in coordinator: TransactionInProgressCoordinator) {
+    func didDismiss(in coordinator: TransactionInProgressCoordinator) {
         removeCoordinator(coordinator)
+
         switch transactionConfirmationResult {
         case .some(let result):
+            let _ = lastViewControllerInNavigationStack.flatMap { navigationController.popToViewController($0, animated: true) }
             delegate?.didFinish(result, in: self)
         case .none:
             break

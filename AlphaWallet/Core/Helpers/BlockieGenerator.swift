@@ -9,6 +9,7 @@ import Foundation
 import BlockiesSwift
 import PromiseKit
 import UIKit.UIImage
+import Combine
 
 enum BlockiesImage {
     case image(image: UIImage, isEnsAvatar: Bool)
@@ -21,6 +22,10 @@ enum BlockiesImage {
         case .url(_, let isEnsAvatar):
             return isEnsAvatar
         }
+    }
+
+    static var defaulBlockieImage: BlockiesImage {
+        return .image(image: R.image.tokenPlaceholderLarge()!, isEnsAvatar: false)
     }
 }
 
@@ -47,42 +52,34 @@ class BlockiesGenerator {
 
     /// Address related icons cache without image size. Cache is using for determine images without sizes and scales, fetched out from OpenSea
     private static var sizeLessCache: [AlphaWallet.Address: BlockiesImage] = [:]
-
-    func promise(address: AlphaWallet.Address, size: Int = 8, scale: Int = 3) -> Promise<BlockiesImage> {
-        enum AnyError: Error {
-            case blockieCreateFailure
-        }
-
-        return firstly {
-            cachedBlockie(address: address, size: .sized(size: size, scale: scale))
-        }.recover { _ -> Promise<BlockiesImage> in
-            self.fetchEnsAvatar(from: address, ens: nil)
-                .get { blockie in
-                    self.cacheBlockie(address: address, blockie: blockie, size: .none)
-                }.recover { _ -> Promise<BlockiesImage> in
-                    self.createBlockiesImage(address: address, size: size, scale: scale).get { blockie in
-                        self.cacheBlockie(address: address, blockie: blockie, size: .sized(size: size, scale: scale))
-                    }
-                }
+    
+    func generatedImage(address: AlphaWallet.Address, size: Int = 8, scale: Int = 3) -> Promise<BlockiesImage> {
+        createBlockiesImage(address: address, size: size, scale: scale).get { blockie in
+            self.cacheBlockie(address: address, blockie: blockie, size: .sized(size: size, scale: scale))
         }
     }
 
-    func promise(address: AlphaWallet.Address, ens: String, size: Int = 8, scale: Int = 3) -> Promise<BlockiesImage> {
-        enum AnyError: Error {
-            case blockieCreateFailure
+    func getBlockie(address: AlphaWallet.Address, ens: String? = nil, size: Int = 8, scale: Int = 3, fallbackImage: BlockiesImage = BlockiesImage.defaulBlockieImage) -> AnyPublisher<BlockiesImage, Never> {
+        return promise(address: address, ens: ens, size: size, scale: size).publisher
+            .receive(on: RunLoop.main)
+            .prepend(fallbackImage)
+            .replaceError(with: fallbackImage)
+            .eraseToAnyPublisher() 
+    }
+
+    func promise(address: AlphaWallet.Address, ens: String? = nil, size: Int = 8, scale: Int = 3) -> Promise<BlockiesImage> {
+        if let cached = cachedBlockie(address: address, size: .sized(size: size, scale: scale)) {
+            return .value(cached)
         }
 
         return firstly {
-            cachedBlockie(address: address, size: .sized(size: size, scale: scale))
+            fetchEnsAvatar(from: address, ens: ens)
+        }.get { blockie in
+            self.cacheBlockie(address: address, blockie: blockie, size: .none)
         }.recover { _ -> Promise<BlockiesImage> in
-            self.fetchEnsAvatar(from: address, ens: ens)
-                .get { blockie in
-                    self.cacheBlockie(address: address, blockie: blockie, size: .none)
-                }.recover { _ -> Promise<BlockiesImage> in
-                    self.createBlockiesImage(address: address, size: size, scale: scale).get { blockie in
-                        self.cacheBlockie(address: address, blockie: blockie, size: .sized(size: size, scale: scale))
-                    }
-                }
+            self.createBlockiesImage(address: address, size: size, scale: scale).get { blockie in
+                self.cacheBlockie(address: address, blockie: blockie, size: .sized(size: size, scale: scale))
+            }
         }
     }
 
@@ -94,65 +91,29 @@ class BlockiesGenerator {
         let promise: Promise<String>
 
         if let ens = ens {
-            promise = GetENSTextRecordsCoordinator(server: .forResolvingEns)
-                .getENSRecord(for: ens, record: .avatar)
+            promise = GetENSTextRecord(server: .forResolvingEns)
+                .getENSRecord(forName: ens, record: .avatar)
         } else {
-            promise = GetENSTextRecordsCoordinator(server: .forResolvingEns)
-                .getENSRecord(for: address, record: .avatar)
+            promise = GetENSTextRecord(server: .forResolvingEns)
+                .getENSRecord(forAddress: address, record: .avatar)
         }
 
         return firstly {
             promise
         }.then { url -> Promise<BlockiesImage> in
-            return Self.decodeEip155URL(url: url).then { value -> Promise<BlockiesImage> in
-                Self.fetchOpenSeaAssetImageUrl(from: value).then { url -> Promise<BlockiesImage> in
-                    return Self.fetchEnsAvatar(request: URLRequest(url: url), queue: .main)
-                }
+            guard let result = eip155URLCoder.decode(from: url) else {
+                return .init(error: TokenImageFetcher.ImageAvailabilityError.notAvailable)
+            }
+            return firstly {
+                OpenSea.fetchAssetImageUrl(for: result, server: .main)
+            }.map { url -> BlockiesImage in
+                .url(url: WebImageURL(url: url, rewriteGoogleContentSizeUrl: .s120), isEnsAvatar: true)
             }.recover { _ -> Promise<BlockiesImage> in
                 guard let url = URL(string: url) else { return .init(error: AnyError.blockieCreateFailure) }
-                return Self.fetchEnsAvatar(request: URLRequest(url: url), queue: .main)
+                return .value(.url(url: WebImageURL(url: url, rewriteGoogleContentSizeUrl: .s120), isEnsAvatar: true))
             }
         }
-    }
-
-    private static func fetchOpenSeaAssetImageUrl(from value: Eip155URL) -> Promise<URL> {
-        return OpenSea.fetchAssetImageUrl(for: value)
-    }
-
-    private static func decodeEip155URL(url: String) -> Promise<Eip155URL> {
-        enum AnyError: Error {
-            case e_1
-        }
-
-        guard let result = eip155URLCoder.decode(from: url) else {
-            return .init(error: AnyError.e_1)
-        }
-        return .value(result)
-    }
-
-    private static func fetchEnsAvatar(request: URLRequest, queue: DispatchQueue) -> Promise<BlockiesImage> {
-        Promise { seal in
-            queue.async {
-                guard let url = request.url else {
-                    return seal.reject(TokenImageFetcher.ImageAvailabilityError.notAvailable)
-                }
-
-                if url.pathExtension == "svg" {
-                    return seal.fulfill(.url(url: WebImageURL(url: url, rewriteGoogleContentSizeUrl: .s120), isEnsAvatar: true))
-                }
-
-                let task = URLSession.shared.dataTask(with: request) { data, _, _ in
-                    guard let image = data.flatMap({ UIImage(data: $0) }) else {
-                        return seal.reject(TokenImageFetcher.ImageAvailabilityError.notAvailable)
-                    }
-
-                    seal.fulfill(.image(image: image, isEnsAvatar: true))
-                }
-
-                task.resume()
-            }
-        }
-    }
+    } 
 
     private func cacheBlockie(address: AlphaWallet.Address, blockie: BlockiesImage, size: BlockieSize) {
         switch size {
@@ -164,30 +125,13 @@ class BlockiesGenerator {
         }
     }
 
-    private func cachedBlockie(address: AlphaWallet.Address, size: BlockieSize) -> Promise<BlockiesImage> {
-        enum AnyError: Error {
-            case cacheNotFound
-        }
-
-        return Promise { seal in
-            var value: BlockiesImage?
-            switch size {
-            case .sized(let size, let scale):
-                let key = BlockieKey(address: address, size: size, scale: scale)
-                value = BlockiesGenerator.cache[key]
-
-                if value == nil {
-                    value = BlockiesGenerator.sizeLessCache[address]
-                }
-            case .none:
-                value = BlockiesGenerator.sizeLessCache[address]
-            }
-
-            if let value = value {
-                seal.fulfill(value)
-            } else {
-                seal.reject(AnyError.cacheNotFound)
-            }
+    private func cachedBlockie(address: AlphaWallet.Address, size: BlockieSize) -> BlockiesImage? {
+        switch size {
+        case .sized(let size, let scale):
+            let key = BlockieKey(address: address, size: size, scale: scale)
+            return BlockiesGenerator.cache[key] ?? BlockiesGenerator.sizeLessCache[address]
+        case .none:
+            return BlockiesGenerator.sizeLessCache[address]
         }
     }
 

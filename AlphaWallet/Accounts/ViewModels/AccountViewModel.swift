@@ -1,44 +1,82 @@
 // Copyright SIX DAY LLC. All rights reserved.
 
 import UIKit
+import Combine
 
-struct AccountViewModel {
+class AccountViewModel {
+    private let domainResolver: DomainResolutionServiceType
+    private let generator: BlockiesGenerator
+    private let subscribeForBalanceUpdates: Bool
+    private let walletBalanceService: WalletBalanceService
+    private let config: Config
     private let analyticsCoordinator: AnalyticsCoordinator
+    private let wallet: Wallet
+    private let current: Wallet?
 
-    let wallet: Wallet
-    let current: Wallet?
-    let walletName: String?
-    var ensName: String?
-    let icon: Subscribable<BlockiesImage> = Subscribable<BlockiesImage>(nil)
+    lazy var apprecation24hour: AnyPublisher<NSAttributedString, Never> = {
+        let initialApprecation24hour = apprecation24hourAttributedString(for: walletBalanceService.walletBalance(wallet: wallet))
+        
+        return walletBalanceService
+            .walletBalancePublisher(wallet: wallet)
+            .compactMap { [weak self] in self?.apprecation24hourAttributedString(for: $0) }
+            .receive(on: RunLoop.main)
+            .prepend(initialApprecation24hour)
+            .eraseToAnyPublisher()
+    }()
 
-    init(wallet: Wallet, current: Wallet?, walletName: String?, analyticsCoordinator: AnalyticsCoordinator) {
+    lazy var balance: AnyPublisher<NSAttributedString, Never> = {
+        let initialBalance = balanceAttributedString(for: walletBalanceService.walletBalance(wallet: wallet).totalAmountString)
+
+        return walletBalanceService.walletBalancePublisher(wallet: wallet)
+            .compactMap { [weak self] in self?.balanceAttributedString(for: $0.totalAmountString) }
+            .receive(on: RunLoop.main)
+            .prepend(initialBalance)
+            .eraseToAnyPublisher()
+    }()
+    
+    lazy var blockieImage: AnyPublisher<BlockiesImage, Never> = {
+        return generator.getBlockie(address: wallet.address)
+            .handleEvents(receiveOutput: { [weak self] value in
+                guard value.isEnsAvatar else { return }
+                self?.analyticsCoordinator.setUser(property: Analytics.UserProperties.hasEnsAvatar, value: true)
+            })
+            .eraseToAnyPublisher()
+    }()
+
+    lazy var addressesAttrinutedString: AnyPublisher<NSAttributedString, Never> = {
+        return domainResolver.resolveEns(address: wallet.address).publisher
+            .prepend((image: nil, resolution: .resolved(nil)))
+            .replaceError(with: (image: nil, resolution: .resolved(nil)))
+            .map { $0.resolution.value }
+            .compactMap { [weak self] in self?.addressAttributedString(ensName: $0) }
+            .receive(on: RunLoop.main)
+            .prepend(addressAttributedString(ensName: nil))
+            .eraseToAnyPublisher()
+    }()
+
+    init(
+        analyticsCoordinator: AnalyticsCoordinator,
+        domainResolver: DomainResolutionServiceType,
+        generator: BlockiesGenerator,
+        subscribeForBalanceUpdates: Bool,
+        walletBalanceService: WalletBalanceService,
+        config: Config,
+        wallet: Wallet,
+        current: Wallet?
+    ) {
+        self.analyticsCoordinator = analyticsCoordinator
         self.wallet = wallet
         self.current = current
-        self.ensName = nil
-        self.walletName = walletName
-        self.analyticsCoordinator = analyticsCoordinator
-
-        switch wallet.type {
-        case .real:
-            icon.subscribe { value in
-                guard let value = value else { return }
-                guard value.isEnsAvatar else { return }
-                analyticsCoordinator.setUser(property: Analytics.UserProperties.hasEnsAvatar, value: true)
-            }
-        case .watch:
-            break
-        }
-
-        AccountViewModel.resolveBlockie(for: self, size: 8, scale: 5)
+        self.config = config
+        self.domainResolver = domainResolver
+        self.generator = generator
+        self.subscribeForBalanceUpdates = subscribeForBalanceUpdates
+        self.walletBalanceService = walletBalanceService
     }
 
     var showWatchIcon: Bool {
         return wallet.type == .watch(wallet.address)
-    }
-
-    var address: AlphaWallet.Address {
-        return wallet.address
-    }
+    } 
 
     var isSelected: Bool {
         return wallet == current
@@ -48,33 +86,37 @@ struct AccountViewModel {
         return Colors.appWhite
     }
 
-    func apprecation24hourAttributedString(for balance: WalletBalance?) -> NSAttributedString {
-        let style = NSMutableParagraphStyle()
-        style.alignment = .right
+    private func apprecation24hourAttributedString(for balance: WalletBalance?) -> NSAttributedString {
+        if subscribeForBalanceUpdates {
+            let style = NSMutableParagraphStyle()
+            style.alignment = .right
 
-        return .init(string: balance?.valuePercentageChangeValue ?? "-", attributes: [
-            .font: Fonts.regular(size: 20),
-            .foregroundColor: balance?.valuePercentageChangeColor ?? R.color.dove()!,
-            .paragraphStyle: style
-        ])
+            return .init(string: balance?.valuePercentageChangeValue ?? "-", attributes: [
+                .font: Fonts.regular(size: 20),
+                .foregroundColor: balance?.valuePercentageChangeColor ?? R.color.dove()!,
+                .paragraphStyle: style
+            ])
+        } else {
+            return .init()
+        }
     }
 
-    func balanceAttributedString(for value: String?) -> NSAttributedString {
+    private func balanceAttributedString(for value: String?) -> NSAttributedString {
         return .init(string: value ?? "--", attributes: [
             .font: Fonts.bold(size: 20),
             .foregroundColor: Colors.black,
         ])
     }
 
-    var addressesAttrinutedString: NSAttributedString {
-        return .init(string: addresses, attributes: [
+    private func addressAttributedString(ensName: String?) -> NSAttributedString {
+        return .init(string: formattedAddressName(ensName: ensName), attributes: [
             .font: Fonts.regular(size: 12),
             .foregroundColor: R.color.dove()!
         ])
     }
 
-    private var addresses: String {
-        if let walletName = walletName {
+    private func formattedAddressName(ensName: String?) -> String {
+        if let walletName = config.walletNames[wallet.address] {
             return "\(walletName) | \(wallet.address.truncateMiddle)"
         } else if let ensName = ensName {
             return "\(ensName) | \(wallet.address.truncateMiddle)"
@@ -82,16 +124,4 @@ struct AccountViewModel {
             return wallet.address.eip55String
         }
     }
-}
-
-extension AccountViewModel {
-    //Because struct can't capture self in closure we using static func to resolve blockie
-    static func resolveBlockie(for viewModel: AccountViewModel, size: Int = 8, scale: Int = 3) {
-        let generator = BlockiesGenerator()
-        generator.promise(address: viewModel.address, size: size, scale: scale).done { image in
-            viewModel.icon.value = image
-        }.catch { _ in
-            viewModel.icon.value = nil
-        }
-    }
-}
+} 

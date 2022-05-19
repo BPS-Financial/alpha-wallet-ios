@@ -42,6 +42,8 @@ public struct Constants {
     public static let arbitrumRinkebyMagicLinkHost = "arbitrum-rinkeby.aw.app"
     public static let palmMagicLinkHost = "palm.aw.app"
     public static let palmTestnetMagicLinkHost = "palmTestnet.aw.app"
+    public static let klaytnCypressMagicLinkHost = "klaytnCypress.aw.app"
+    public static let klaytnBaobabTestnetMagicLinkHost = "klaytnBaobabTestnet.aw.app"
 
     public enum Currency {
         static let usd = "USD"
@@ -87,9 +89,6 @@ public struct Constants {
 
     public static let unstoppableDomainsV2API = "https://unstoppabledomains.g.alchemy.com"
     public static let unstoppableDomainsRecordKeys = ["crypto.MATIC.version.MATIC.address", "crypto.ETH.address", "crypto.MATIC.version.ERC20.address"]
-    //OpenSea links for erc721 assets
-    public static let openseaAPI = "https://api.opensea.io/"
-    public static let openseaRinkebyAPI = "https://rinkeby-api.opensea.io/"
     //Using "kat" instead of "cryptokitties" to avoid being mistakenly detected by app review as supporting CryptoKitties
     public static let katContractAddress = "0x06012c8cf97bead5deae237070f9587f8e7a266d"
 
@@ -101,14 +100,6 @@ public struct Constants {
     static func buyWitRampUrl(asset: String) -> String {
         "https://buy.ramp.network/?hostApiKey=\(Constants.Credentials.rampApiKey)&hostLogoUrl=https%3A%2F%2Falphawallet.com%2Fwp-content%2Fthemes%2Falphawallet%2Fimg%2Falphawallet-logo.svg&hostAppName=AlphaWallet&swapAsset=\(asset)"
     }
-
-    //ENS
-    static let ENSRecordsContractAddress = AlphaWallet.Address(string: "0x4976fb03C32e5B8cfe2b6cCB31c09Ba78EBaBa41")!
-    static let ENSRecordsContractAddressPOA = AlphaWallet.Address(string: "0xF60cd4F86141D7Fe4A1A9961451Ea09230A14617")!
-    static let ENSRegistrarAddress = AlphaWallet.Address(string: "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e")!
-    static let ENSRegistrarRopsten = ENSRegistrarAddress
-    static let ENSRegistrarRinkeby = ENSRegistrarAddress
-    static let ENSRegistrarGoerli = ENSRegistrarAddress
 
     static let highStandardEthereumMainnetGasThresholdGwei = BigInt(130)
     //DAS
@@ -190,14 +181,41 @@ public struct Constants {
 
     static let launchShortcutKey = "com.stormbird.alphawallet.qrScanner"
 
-    static let enjinApiUrl = URL(string: "https://cloud.enjin.io/graphql/default")!
+    enum Enjin {
+        static let apiUrl = URL(string: "https://cloud.enjin.io/graphql/default")!
+        //TODO: add support Kovan
+        //static let apiUrl = URL(string: "https://kovan.cloud.enjin.io/graphql/default")!
+    }
 
     enum BlockscanChat {
         static let blockscanChatWebUrl = URL(string: "https://chat.blockscan.com/login")!
         static let unreadCountEndpoint = URL(string: "https://blockscan-chat-proxy.herokuapp.com/blockscanchat/unreadcount")!
     }
 
-    static let statHatEndPoint = URL(string: "https://api.stathat.com/ez")!
+    enum Coingecko {
+        static let baseUrl = URL(string: "https://api.coingecko.com")!
+    }
+
+    enum OneInch {
+        static let exchangeUrl = URL(string: "https://api.1inch.exchange")!
+    }
+
+    enum HoneySwap {
+        static let exchangeUrl = URL(string: "https://tokens.honeyswap.org/")!
+    }
+
+    enum Ramp {
+        static let exchangeUrl = URL(string: "https://api-instant.ramp.network")!
+    }
+
+    enum Covalent {
+        static let apiBaseUrl = URL(string: "https://api.covalenthq.com")!
+        static let newlyAddedTransactionUpdateInterval: TimeInterval = 15
+        static let newlyAddedTransactionsPerPage = 100
+        static let oldestTransactionUpdateInterval: TimeInterval = 25
+        static let oldestAddedTransactionsPerPage = 500
+        static let pendingTransactionUpdateInterval: TimeInterval = 5
+    }
 
     enum WalletConnect {
         static let relayURL = URL(string: "https://relay.walletconnect.com")!
@@ -225,4 +243,9 @@ public struct Constants {
     static let fetchContractDataTimeout = TimeInterval(4)
 
     static let refreshTokensThresholdSec: Int = 1
+
+    static let googleServiceInfoPlistContent: String? = {
+        R.file.googleServiceInfoPlist()?.path
+    }()
+
 }

@@ -77,6 +77,7 @@ struct FileStorage: StorageType {
             do {
                 try data.write(to: url, options: .atomicWrite)
                 try url.addSkipBackupAttributeToItemAtURL()
+                try url.addProtectionKeyNone()
 
                 result = true
             } catch {
@@ -114,6 +115,18 @@ extension URL {
         var resourceValues = URLResourceValues()
         resourceValues.isExcludedFromBackup = true
 
-        try self.setResourceValues(resourceValues)
+        try setResourceValues(resourceValues)
+    }
+
+    mutating func addProtectionKeyNone() throws {
+        guard FileManager.default.fileExists(atPath: relativePath) else { return }
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: relativePath)
+        let protectionType = attributes[.protectionKey] as? FileProtectionType
+        if protectionType != .some(FileProtectionType.none) {
+            try FileManager.default.setAttributes([
+                FileAttributeKey.protectionKey: FileProtectionType.none
+            ], ofItemAtPath: relativePath)
+        }
     }
 }

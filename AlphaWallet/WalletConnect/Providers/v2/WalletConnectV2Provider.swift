@@ -10,10 +10,6 @@ import WalletConnect
 import WalletConnectUtils
 import Combine
 
-protocol NativeCryptoCurrencyPricesProvider: class {
-    var nativeCryptoCurrencyPrices: ServerDictionary<Subscribable<Double>> { get }
-}
-
 class WalletConnectV2Provider: WalletConnectServer {
 
     private var pendingSessionProposal: Session.Proposal?
@@ -30,14 +26,12 @@ class WalletConnectV2Provider: WalletConnectServer {
     }()
     private var pendingSessionStack: [Session.Proposal] = []
 
-    lazy var sessionsSubscribable: Subscribable<[AlphaWallet.WalletConnect.Session]> = {
-        storage.valueSubscribable.map { sessions -> [AlphaWallet.WalletConnect.Session] in
-            return sessions.map { session -> AlphaWallet.WalletConnect.Session in
-                .init(multiServerSession: session)
-            }
-        }
+    lazy var sessions: AnyPublisher<[AlphaWallet.WalletConnect.Session], Never> = {
+        return storage.publisher
+            .map { $0.map { AlphaWallet.WalletConnect.Session(multiServerSession: $0) } }
+            .eraseToAnyPublisher()
     }()
-    private let storage: SubscribableFileStorage<[MultiServerWalletConnectSession]>
+    private let storage: Storage<[MultiServerWalletConnectSession]>
     weak var delegate: WalletConnectServerDelegate?
 
     enum Keys {
@@ -50,7 +44,7 @@ class WalletConnectV2Provider: WalletConnectServer {
     private var sessionsSubject: CurrentValueSubject<ServerDictionary<WalletSession>, Never>
     private var cancelable = Set<AnyCancellable>()
     //NOTE: we support only single account session as WalletConnects request doesn't provide a wallets address to sign transaction or some other method, so we cant figure out wallet address to sign, so for now we use only active wallet session address
-    init(sessionsSubject: CurrentValueSubject<ServerDictionary<WalletSession>, Never>, storage: SubscribableFileStorage<[MultiServerWalletConnectSession]> = .init(fileName: Keys.storageFileKey, defaultValue: [])) {
+    init(sessionsSubject: CurrentValueSubject<ServerDictionary<WalletSession>, Never>, storage: Storage<[MultiServerWalletConnectSession]> = .init(fileName: Keys.storageFileKey, defaultValue: [])) {
         self.sessionsSubject = sessionsSubject
         self.storage = storage
         client.delegate = self
@@ -207,9 +201,8 @@ extension WalletConnectV2Provider: WalletConnectClientDelegate {
             let request: AlphaWallet.WalletConnect.Session.Request = .v2(request: sessionRequest)
             WalletConnectRequestConverter()
                 .convert(request: request, requester: session.requester)
-                .map { type -> AlphaWallet.WalletConnect.Action in
-                    return .init(type: type)
-                }.done { action in
+                .map { AlphaWallet.WalletConnect.Action(type: $0) }
+                .done { action in
                     strongSelf.delegate?.server(strongSelf, action: action, request: request, session: .init(multiServerSession: session))
                 }.catch { error in
                     strongSelf.delegate?.server(strongSelf, didFail: error)

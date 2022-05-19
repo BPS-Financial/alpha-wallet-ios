@@ -182,6 +182,8 @@
 "detecting.serverAutomatically" = "Detect Automatically";
 "detecting.serverAutomatically.buttonTitle" = "Auto";
 "editTokens.searchBar.placeholder.title" = "토큰 검색";
+"gettingStarted.alertSheet.option.watch.title" = "Track Wallet Address";
+"gettingStarted.alertSheet.option.import.title" = "Import Existing Wallet";
 "importWallet.import.alertSheet.option.title" = "iCloud/Dropbox/Google Drive";
 "importWallet.import.alertSheet.title" = "지갑 옵션 가져오기";
 "importWallet.import.button.title" = "가져오기";
@@ -340,6 +342,8 @@
 "a.wallet.contents.filter.all.title" = "모두";
 "a.wallet.contents.filter.currencyOnly.title" = "통화";
 "a.wallet.contents.filter.assetsOnly.title" = "자산";
+"a.wallet.contents.filter.defi.title" = "DeFi";
+"a.wallet.contents.filter.governance.title" = "Governance";
 "a.wallet.contents.filter.collectiblesOnly.title" = "Collectibles";
 "a.wallet.contents.issuer.title" = "발행자";
 "a.wallet.next.button.title" = "다음";
@@ -478,9 +482,9 @@
 "TokenScript.type2.conflictingFiles" = "Conflicting TokenScript Files";
 "TokenScript.type2.oldSchemaVersion" = "Old TokenScript Version";
 "TokenScript.type2.invalidSignature" = "Invalid Signature";
-"gettingStarted.subtitle" = "Welcome to AlphaWallet";
-"gettingStarted.newWallet" = "Create a New Wallet";
-"gettingStarted.alreadyHaveWallet" = "I already have a wallet:";
+"gettingStarted.subtitle" = "AlphaWallet";
+"gettingStarted.newWallet" = "Create a new Wallet";
+"gettingStarted.alreadyHaveWallet" = "I already have a Wallet";
 "backup.prompt.title" = "Your Wallet is not backed up!";
 "backup.prompt.description.withAmount" = "You have not backed up your wallet yet. You have %@ USD net. Act now.";
 "backup.prompt.backupButton.title" = "Back up Wallet";
@@ -743,6 +747,8 @@
 "nonfungibles.value.blockchain" = "Blockchain";
 "nonfungibles.value.tokenStandard" = "Token Standard";
 "nonfungibles.value.contract" = "Contract";
+"nonfungibles.value.rarity" = "%d%@ have this trait";
+"nonfungibles.value.rarity.unique" = "Unique";
 "url.discord" = "Discord";
 "url.telegramCustomer" = "Telegram (Customer Support)";
 "url.twitter" = "Twitter";
@@ -840,3 +846,4 @@
 "transactionState.failed" = "Failed";
 "transactionState.unknown" = "Unknown";
 "settings.checkTransactionState" = "Check Transaction State";
+"advanced.settings.features.title" = "Features";

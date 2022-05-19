@@ -10,7 +10,7 @@ import PromiseKit
 
 extension VerifiableStatusViewController where Self: UIViewController {
     func updateNavigationRightBarButtons(withTokenScriptFileStatus statusPromise: Promise<TokenLevelTokenScriptDisplayStatus>?, hasShowInfoButton: Bool = true) {
-        guard Features.isTokenScriptSignatureStatusEnabled else { return }
+        guard Features.default.isAvailable(.isTokenScriptSignatureStatusEnabled) else { return }
 
         guard let status = statusPromise?.value else {
             let label: UIBarButtonItem = .init(title: R.string.localizable.tokenScriptVerifying(), style: .plain, target: nil, action: nil)
@@ -145,7 +145,7 @@ protocol TokenVerifiableStatusViewController: VerifiableStatusViewController {
 
 extension TokenVerifiableStatusViewController {
     var tokenScriptFileStatus: Promise<TokenLevelTokenScriptDisplayStatus> {
-        XMLHandler.tokenScriptStatus(forContract: contract, assetDefinitionStore: assetDefinitionStore)
+        XMLHandler.functional.tokenScriptStatus(forContract: contract, assetDefinitionStore: assetDefinitionStore)
     }
 }
 
@@ -158,6 +158,6 @@ protocol OptionalTokenVerifiableStatusViewController: VerifiableStatusViewContro
 extension OptionalTokenVerifiableStatusViewController {
     var tokenScriptFileStatus: Promise<TokenLevelTokenScriptDisplayStatus> {
         guard let contract = contract else { return .value(.type0NoTokenScript) }
-        return XMLHandler.tokenScriptStatus(forContract: contract, assetDefinitionStore: assetDefinitionStore)
+        return XMLHandler.functional.tokenScriptStatus(forContract: contract, assetDefinitionStore: assetDefinitionStore)
     }
 }

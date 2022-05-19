@@ -12,14 +12,11 @@ enum RestartReason {
 
 protocol SettingsCoordinatorDelegate: class, CanOpenURL {
     func didRestart(with account: Wallet, in coordinator: SettingsCoordinator, reason: RestartReason)
-	func didUpdateAccounts(in coordinator: SettingsCoordinator)
 	func didCancel(in coordinator: SettingsCoordinator)
 	func didPressShowWallet(in coordinator: SettingsCoordinator)
 	func assetDefinitionsOverrideViewController(for: SettingsCoordinator) -> UIViewController?
     func showConsole(in coordinator: SettingsCoordinator)
-	func delete(account: Wallet, in coordinator: SettingsCoordinator)
     func restartToReloadServersQueued(in coordinator: SettingsCoordinator)
-    func openBlockscanChat(in coordinator: SettingsCoordinator)
 }
 
 class SettingsCoordinator: Coordinator {
@@ -30,7 +27,8 @@ class SettingsCoordinator: Coordinator {
     private let promptBackupCoordinator: PromptBackupCoordinator
 	private let analyticsCoordinator: AnalyticsCoordinator
     private let walletConnectCoordinator: WalletConnectCoordinator
-    private let walletBalanceCoordinator: WalletBalanceCoordinatorType
+    private let walletBalanceService: WalletBalanceService
+    private let blockscanChatService: BlockscanChatService
 	private var account: Wallet {
 		return sessions.anyValue.account
 	}
@@ -55,10 +53,11 @@ class SettingsCoordinator: Coordinator {
         promptBackupCoordinator: PromptBackupCoordinator,
         analyticsCoordinator: AnalyticsCoordinator,
         walletConnectCoordinator: WalletConnectCoordinator,
-        walletBalanceCoordinator: WalletBalanceCoordinatorType
+        walletBalanceService: WalletBalanceService,
+        blockscanChatService: BlockscanChatService
 	) {
 		self.navigationController = navigationController
-        
+
         self.keystore = keystore
 		self.config = config
 		self.sessions = sessions
@@ -66,7 +65,8 @@ class SettingsCoordinator: Coordinator {
         self.promptBackupCoordinator = promptBackupCoordinator
 		self.analyticsCoordinator = analyticsCoordinator
         self.walletConnectCoordinator = walletConnectCoordinator
-        self.walletBalanceCoordinator = walletBalanceCoordinator
+        self.walletBalanceService = walletBalanceService
+        self.blockscanChatService = blockscanChatService
 		promptBackupCoordinator.subtlePromptDelegate = self
 	}
 
@@ -115,7 +115,7 @@ extension SettingsCoordinator: SettingsViewControllerDelegate {
     }
 
     func settingsViewControllerBlockscanChatSelected(in controller: SettingsViewController) {
-        delegate?.openBlockscanChat(in: self)
+        blockscanChatService.openBlockscanChat(forAddress: account.address)
     }
 
     func settingsViewControllerWalletConnectSelected(in controller: SettingsViewController) {
@@ -148,10 +148,9 @@ extension SettingsCoordinator: SettingsViewControllerDelegate {
                 config: config,
                 navigationController: navigationController,
                 keystore: keystore,
-                promptBackupCoordinator: promptBackupCoordinator,
 				analyticsCoordinator: analyticsCoordinator,
                 viewModel: .init(configuration: .changeWallets, animatedPresentation: true),
-                walletBalanceCoordinator: walletBalanceCoordinator
+                walletBalanceService: walletBalanceService
         )
         coordinator.delegate = self
         coordinator.start()
@@ -187,7 +186,7 @@ extension SettingsCoordinator: SettingsViewControllerDelegate {
     }
 
     func settingsViewControllerAdvancedSettingsSelected(in controller: SettingsViewController) {
-        let controller = AdvancedSettingsViewController(keystore: keystore, config: config)
+        let controller = AdvancedSettingsViewController(wallet: account, config: config)
         controller.delegate = self
         controller.hidesBottomBarWhenPushed = true
         navigationController.pushViewController(controller, animated: true)
@@ -216,15 +215,18 @@ extension SettingsCoordinator: CanOpenURL {
 }
 
 extension SettingsCoordinator: AccountsCoordinatorDelegate {
+
+    func didFinishBackup(account: AlphaWallet.Address, in coordinator: AccountsCoordinator) {
+        promptBackupCoordinator.markBackupDone()
+        promptBackupCoordinator.showHideCurrentPrompt()
+    }
+
 	func didAddAccount(account: Wallet, in coordinator: AccountsCoordinator) {
-		delegate?.didUpdateAccounts(in: self)
+        //no-op
 	}
 
 	func didDeleteAccount(account: Wallet, in coordinator: AccountsCoordinator) {
-        delegate?.delete(account: account, in: self)
-        TransactionsTracker.resetFetchingState(account: account, config: config)
-		delegate?.didUpdateAccounts(in: self)
-		guard !coordinator.accountsViewController.hasWallets else { return }
+        guard !coordinator.accountsViewController.viewModel.hasWallets else { return }
         coordinator.navigationController.popViewController(animated: true)
 		delegate?.didCancel(in: self)
 	}
@@ -237,7 +239,7 @@ extension SettingsCoordinator: AccountsCoordinatorDelegate {
     func didSelectAccount(account: Wallet, in coordinator: AccountsCoordinator) {
         coordinator.navigationController.popViewController(animated: true)
         removeCoordinator(coordinator)
-        if keystore.currentWallet == account {
+        if self.account == account {
             //no-op
         } else {
             restart(for: account, reason: .walletChange)
@@ -328,11 +330,18 @@ extension SettingsCoordinator: AdvancedSettingsViewControllerDelegate {
     }
 
     func advancedSettingsViewControllerExportJSONKeystoreSelected(in controller: AdvancedSettingsViewController) {
-        let coordinator = ExportJsonKeystoreCoordinator(keystore: keystore, navigationController: navigationController)
+        let coordinator = ExportJsonKeystoreCoordinator(keystore: keystore, wallet: account, navigationController: navigationController)
         addCoordinator(coordinator)
         coordinator.delegate = self
         coordinator.start()
-    } 
+    }
+
+    func advancedSettingsViewControllerFeaturesSelected(in controller: AdvancedSettingsViewController) {
+        let controller = FeaturesViewController()
+        controller.hidesBottomBarWhenPushed = true
+        navigationController.pushViewController(controller, animated: true)
+    }
+
 }
 
 extension SettingsCoordinator: ChooseSendPrivateTransactionsProviderViewControllerDelegate {

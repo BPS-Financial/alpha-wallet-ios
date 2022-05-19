@@ -30,14 +30,20 @@ protocol DomainResolutionServiceType {
 }
 
 protocol CachebleAddressResolutionServiceType {
-    func cachedAddressValue(for input: String) -> AlphaWallet.Address?
+    func cachedAddressValue(forName name: String) -> AlphaWallet.Address?
 }
 
 protocol CachedEnsResolutionServiceType {
-    func cachedEnsValue(for input: AlphaWallet.Address) -> String?
+    func cachedEnsValue(forAddress address: AlphaWallet.Address) -> String?
 }
 
 struct ENSLookupKey: Hashable {
-    let name: String
+    let nameOrAddress: String
     let server: RPCServer
+
+    init(nameOrAddress: String, server: RPCServer) {
+        //Lowercase for case-insensitive lookups
+        self.nameOrAddress = nameOrAddress.lowercased()
+        self.server = server
+    }
 }

@@ -2,77 +2,87 @@
 
 import Foundation
 import RealmSwift
-import PromiseKit
 import Combine
 
 protocol EventsActivityDataStoreProtocol {
-    var recentEventsPublisher: AnyPublisher<RealmCollectionChange<Results<EventActivity>>, Never> { get }
+    var recentEventsPublisher: AnyPublisher<ChangeSet<[EventActivity]>, Never> { get }
 
-    func getRecentEventsSortedByBlockNumber(forContract contract: AlphaWallet.Address, server: RPCServer, eventName: String, interpolatedFilter: String) -> Results<EventActivity>
-    func getLastMatchingEventSortedByBlockNumber(forContract contract: AlphaWallet.Address, tokenContract: AlphaWallet.Address, server: RPCServer, eventName: String) -> Promise<EventActivityInstance?>
+    func getRecentEventsSortedByBlockNumber(forContract contract: AlphaWallet.Address, server: RPCServer, eventName: String, interpolatedFilter: String) -> [EventActivity]
+    func getLastMatchingEventSortedByBlockNumber(forContract contract: AlphaWallet.Address, tokenContract: AlphaWallet.Address, server: RPCServer, eventName: String) -> EventActivity?
     func add(events: [EventActivityInstance])
 }
 
 class EventsActivityDataStore: EventsActivityDataStoreProtocol {
-    //For performance. Fetching and displaying 10k activities stalls the app for a few seconds. We just keep it simple, no pagination. Pagination is complicated because we have to handle re-fetching of activities, updates as well as blending with transactions
-    static let numberOfActivitiesToUse = 100
-
-    private let realm: Realm
-
-    init(realm: Realm) {
-        self.realm = realm
+    private let store: RealmStore
+    private let queue = DispatchQueue(label: "com.NonActivityEventsDataStore.UpdateQueue")
+    
+    init(store: RealmStore) {
+        self.store = store
     }
 
-    var recentEventsPublisher: AnyPublisher<RealmCollectionChange<Results<EventActivity>>, Never> {
-        return realm.objects(EventActivity.self)
-            .sorted(byKeyPath: "date", ascending: false)
-            .changesetPublisher
-            .eraseToAnyPublisher()
+    var recentEventsPublisher: AnyPublisher<ChangeSet<[EventActivity]>, Never> {
+        var publisher: AnyPublisher<ChangeSet<[EventActivity]>, Never>!
+        store.performSync { realm in
+            publisher = realm.objects(EventActivity.self)
+                .sorted(byKeyPath: "date", ascending: false)
+                .changesetPublisher
+                .subscribe(on: queue)
+                .map { change in
+                    switch change {
+                    case .initial(let eventActivities):
+                        return .initial(eventActivities.toArray())
+                    case .update(let eventActivities, let deletions, let insertions, let modifications):
+                        return .update(eventActivities.toArray(), deletions: deletions, insertions: insertions, modifications: modifications)
+                    case .error(let error):
+                        return .error(error)
+                    }
+                }
+                .eraseToAnyPublisher()
+        }
+        return publisher
     }
 
-    func getRecentEventsSortedByBlockNumber(forContract contract: AlphaWallet.Address, server: RPCServer, eventName: String, interpolatedFilter: String) -> Results<EventActivity> {
+    func getRecentEventsSortedByBlockNumber(forContract contract: AlphaWallet.Address, server: RPCServer, eventName: String, interpolatedFilter: String) -> [EventActivity] {
         let predicate = EventsActivityDataStore
             .functional
             .matchingEventPredicate(forContract: contract, server: server, eventName: eventName, interpolatedFilter: interpolatedFilter)
 
-        return realm.objects(EventActivity.self)
-            .filter(predicate)
-            .sorted(byKeyPath: "blockNumber", ascending: false)
+        var eventActivities: [EventActivity] = []
+        store.performSync { realm in
+            eventActivities = realm.objects(EventActivity.self)
+                .filter(predicate)
+                .sorted(byKeyPath: "blockNumber", ascending: false)
+                .toArray()
+        }
+
+        return eventActivities
     }
 
-    func getLastMatchingEventSortedByBlockNumber(forContract contract: AlphaWallet.Address, tokenContract: AlphaWallet.Address, server: RPCServer, eventName: String) -> Promise<EventActivityInstance?> {
+    func getLastMatchingEventSortedByBlockNumber(forContract contract: AlphaWallet.Address, tokenContract: AlphaWallet.Address, server: RPCServer, eventName: String) -> EventActivity? {
+        let predicate = EventsActivityDataStore
+            .functional
+            .matchingEventPredicate(forContract: contract, tokenContract: tokenContract, server: server, eventName: eventName)
 
-        return Promise { seal in
-            DispatchQueue.main.async { [weak self] in
-                guard let strongSelf = self else { return seal.reject(PMKError.cancelled) }
-                let predicate = EventsActivityDataStore
-                    .functional
-                    .matchingEventPredicate(forContract: contract, tokenContract: tokenContract, server: server, eventName: eventName)
-
-                let objects = strongSelf.realm.objects(EventActivity.self)
+        var eventActivity: EventActivity?
+        store.performSync { realm in
+            eventActivity = realm.objects(EventActivity.self)
                     .filter(predicate)
                     .sorted(byKeyPath: "blockNumber")
+                    .toArray()
                     .last
-                    .map { EventActivityInstance(event: $0) }
-
-                seal.fulfill(objects)
-            }
         }
-    }
 
-    private func delete<S: Sequence>(events: S) where S.Element: EventActivity {
-        try? realm.write {
-            realm.delete(events)
-        }
+        return eventActivity
     }
 
     func add(events: [EventActivityInstance]) {
         guard !events.isEmpty else { return }
         let eventsToSave = events.map { EventActivity(value: $0) }
-
-        realm.beginWrite()
-        realm.add(eventsToSave, update: .all)
-        try? realm.commitWrite()
+        store.performSync { realm in
+            try? realm.safeWrite {
+                realm.add(eventsToSave, update: .all)
+            }
+        }
     }
 }
 

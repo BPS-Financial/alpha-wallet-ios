@@ -6,6 +6,7 @@
 //
 
 import UIKit
+import Combine
 
 protocol WalletConnectSessionViewControllerDelegate: AnyObject {
     func controller(_ controller: WalletConnectSessionViewController, switchNetworkSelected sender: UIButton)
@@ -48,7 +49,7 @@ class WalletConnectSessionViewController: UIViewController {
     private let dappUrlRow = WalletConnectRowView()
     private let chainRow = WalletConnectRowView()
     private let methodsRow = WalletConnectRowView()
-    private let buttonsBar = ButtonsBar(configuration: .empty)
+    private let buttonsBar = HorizontalButtonsBar(configuration: .empty)
     var rpcServers: [RPCServer] {
         viewModel.rpcServers
     }
@@ -59,6 +60,7 @@ class WalletConnectSessionViewController: UIViewController {
         return view
     }()
     private let provider: WalletConnectServerProviderType
+    private var cancelable = Set<AnyCancellable>()
     
     init(viewModel: WalletConnectSessionDetailsViewModel, provider: WalletConnectServerProviderType) {
         self.viewModel = viewModel
@@ -101,9 +103,12 @@ class WalletConnectSessionViewController: UIViewController {
         button1.addTarget(self, action: #selector(switchNetworkButtonSelected), for: .touchUpInside)
 
         reconfigure()
-        provider.sessionsSubscribable.subscribe { [weak self] _ in
-            self?.reconfigure()
-        }
+        
+        provider.sessions
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.reconfigure()
+            }.store(in: &cancelable)
     }
 
     override func viewWillAppear(_ animated: Bool) {

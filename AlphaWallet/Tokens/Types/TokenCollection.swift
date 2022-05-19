@@ -24,6 +24,7 @@ final class MultipleChainsTokenCollection: NSObject, TokenCollection {
     var tokensViewModel: AnyPublisher<TokensViewModel, Never> {
         tokensViewModelSubject.eraseToAnyPublisher()
     }
+    private let queue = DispatchQueue(label: "com.MultipleChainsTokenCollection.updateQueue")
 
     init(tokensFilter: TokensFilter, tokensDataStore: TokensDataStore, config: Config) {
         self.tokensFilter = tokensFilter
@@ -36,10 +37,12 @@ final class MultipleChainsTokenCollection: NSObject, TokenCollection {
 
         tokensDataStore
             .enabledTokenObjectsChangesetPublisher(forServers: enabledServers)
+            .receive(on: queue)
             .combineLatest(refereshSubject, { changeset, _ in return changeset.asTokensArray })
             .map { MultipleChainsTokensDataStore.functional.erc20AddressForNativeTokenFilter(servers: enabledServers, tokenObjects: $0) }
-            .map { TokensViewModel(tokensFilter: self.tokensFilter, tokens: $0, config: config) }
-            .debounce(for: .seconds(Constants.refreshTokensThresholdSec), scheduler: DispatchQueue.main)
+            .map { TokensViewModel(tokensFilter: tokensFilter, tokens: $0, config: config) }
+            .debounce(for: .seconds(Constants.refreshTokensThresholdSec), scheduler: queue)
+            .receive(on: RunLoop.main)
             .sink { [weak self] tokensViewModel in
                 self?.tokensViewModelSubject.send(tokensViewModel)
             }.store(in: &cancelable)
@@ -83,6 +86,8 @@ extension RPCServer {
         case .arbitrumRinkeby: return 26
         case .palm: return 27
         case .palmTestnet: return 28
+        case .klaytnCypress: return 29
+        case .klaytnBaobabTestnet: return 30 
         }
     }
 }

@@ -6,7 +6,6 @@
 import Foundation
 import BigInt
 import Result
-import TrustKeystore
 
 protocol ClaimOrderCoordinatorDelegate: class, CanOpenURL {
     func coordinator(_ coordinator: ClaimPaidOrderCoordinator, didFailTransaction error: AnyError)
@@ -21,7 +20,6 @@ class ClaimPaidOrderCoordinator: Coordinator {
     private let session: WalletSession
     private let tokenObject: TokenObject
     private let signedOrder: SignedOrder
-    private let ethPrice: Subscribable<Double>
     private let analyticsCoordinator: AnalyticsCoordinator
 
     private var numberOfTokens: UInt {
@@ -37,13 +35,12 @@ class ClaimPaidOrderCoordinator: Coordinator {
     var coordinators: [Coordinator] = []
     weak var delegate: ClaimOrderCoordinatorDelegate?
 
-    init(navigationController: UINavigationController, keystore: Keystore, session: WalletSession, tokenObject: TokenObject, signedOrder: SignedOrder, ethPrice: Subscribable<Double>, analyticsCoordinator: AnalyticsCoordinator) {
+    init(navigationController: UINavigationController, keystore: Keystore, session: WalletSession, tokenObject: TokenObject, signedOrder: SignedOrder, analyticsCoordinator: AnalyticsCoordinator) {
         self.navigationController = navigationController
         self.keystore = keystore
         self.session = session
         self.tokenObject = tokenObject
         self.signedOrder = signedOrder
-        self.ethPrice = ethPrice
         self.analyticsCoordinator = analyticsCoordinator
     }
 
@@ -75,7 +72,7 @@ class ClaimPaidOrderCoordinator: Coordinator {
                         gasPrice: nil,
                         nonce: nil
                 )
-                let coordinator = TransactionConfirmationCoordinator(presentingViewController: strongSelf.navigationController, session: strongSelf.session, transaction: transaction, configuration: .claimPaidErc875MagicLink(confirmType: .signThenSend, keystore: strongSelf.keystore, price: strongSelf.signedOrder.order.price, ethPrice: strongSelf.ethPrice, numberOfTokens: strongSelf.numberOfTokens), analyticsCoordinator: strongSelf.analyticsCoordinator)
+                let coordinator = TransactionConfirmationCoordinator(presentingViewController: strongSelf.navigationController, session: strongSelf.session, transaction: transaction, configuration: .claimPaidErc875MagicLink(confirmType: .signThenSend, keystore: strongSelf.keystore, price: strongSelf.signedOrder.order.price, numberOfTokens: strongSelf.numberOfTokens), analyticsCoordinator: strongSelf.analyticsCoordinator)
                 coordinator.delegate = self
                 strongSelf.addCoordinator(coordinator)
                 coordinator.start(fromSource: .claimPaidMagicLink)
@@ -149,7 +146,7 @@ class ClaimPaidOrderCoordinator: Coordinator {
                                       completion: @escaping (Swift.Result<Data, AnyError>) -> Void) {
 
         do {
-            let parameters: [Any] = [expiry, tokenIds, BigUInt(v), Data(_hex: r), Data(_hex: s), TrustKeystore.Address(address: recipient)]
+            let parameters: [Any] = [expiry, tokenIds, BigUInt(v), Data(_hex: r), Data(_hex: s), recipient]
             let functionEncoder = Function(name: "spawnPassTo", parameters: [
                 .uint(bits: 256),
                 .dynamicArray(.uint(bits: 256)),
@@ -182,7 +179,7 @@ class ClaimPaidOrderCoordinator: Coordinator {
                 BigUInt(v),
                 Data(_hex: r),
                 Data(_hex: s),
-                Address(address: recipient)
+                recipient
             ]
             let functionEncoder = Function(name: "dropCurrency", parameters: [
                 .uint(bits: 256),
@@ -204,8 +201,10 @@ class ClaimPaidOrderCoordinator: Coordinator {
 
 extension ClaimPaidOrderCoordinator: TransactionConfirmationCoordinatorDelegate {
     func coordinator(_ coordinator: TransactionConfirmationCoordinator, didFailTransaction error: AnyError) {
-        //TODO improve error message. Several of this delegate func
-        coordinator.navigationController.displayError(message: error.localizedDescription)
+        UIApplication.shared
+            .presentedViewController(or: navigationController)
+            .displayError(message: error.prettyError)
+        
         delegate?.coordinator(self, didFailTransaction: error)
     }
 

@@ -17,12 +17,13 @@ class TransferNFTCoordinator: Coordinator {
     private let keystore: Keystore
     private let tokenObject: TokenObject
     private let session: WalletSession
-    private let ethPrice: Subscribable<Double>
     private let assetDefinitionStore: AssetDefinitionStore
     private let analyticsCoordinator: AnalyticsCoordinator
     private let tokenHolder: TokenHolder
     private var transactionConfirmationResult: ConfirmResult? = .none
     private let transactionType: TransactionType
+    private var lastViewControllerInNavigationStack: UIViewController?
+    
     weak var delegate: TransferNFTCoordinatorDelegate?
     let navigationController: UINavigationController
     var coordinators: [Coordinator] = []
@@ -32,7 +33,6 @@ class TransferNFTCoordinator: Coordinator {
             navigationController: UINavigationController,
             keystore: Keystore,
             tokenHolder: TokenHolder,
-            ethPrice: Subscribable<Double>,
             tokenObject: TokenObject,
             transactionType: TransactionType,
             assetDefinitionStore: AssetDefinitionStore,
@@ -43,11 +43,11 @@ class TransferNFTCoordinator: Coordinator {
         self.session = session
         self.keystore = keystore
         self.navigationController = navigationController
-        self.ethPrice = ethPrice
         self.tokenObject = tokenObject
         self.assetDefinitionStore = assetDefinitionStore
         self.analyticsCoordinator = analyticsCoordinator
         navigationController.navigationBar.isTranslucent = false
+        self.lastViewControllerInNavigationStack = navigationController.viewControllers.last
     }
 
     func start() {
@@ -64,7 +64,7 @@ class TransferNFTCoordinator: Coordinator {
 
     private func makeTransferTokensCardViaWalletAddressViewController(token: TokenObject, for tokenHolder: TokenHolder, paymentFlow: PaymentFlow) -> TransferTokensCardViaWalletAddressViewController {
         let viewModel = TransferTokensCardViaWalletAddressViewControllerViewModel(token: token, tokenHolder: tokenHolder, assetDefinitionStore: assetDefinitionStore)
-        let controller = TransferTokensCardViaWalletAddressViewController(analyticsCoordinator: analyticsCoordinator, token: token, tokenHolder: tokenHolder, paymentFlow: paymentFlow, viewModel: viewModel, assetDefinitionStore: assetDefinitionStore, keystore: keystore)
+        let controller = TransferTokensCardViaWalletAddressViewController(analyticsCoordinator: analyticsCoordinator, token: token, tokenHolder: tokenHolder, paymentFlow: paymentFlow, viewModel: viewModel, assetDefinitionStore: assetDefinitionStore, keystore: keystore, session: session)
         controller.configure()
         controller.delegate = self
         return controller
@@ -106,7 +106,7 @@ extension TransferNFTCoordinator: TransferTokensCardViaWalletAddressViewControll
         )
 
         let tokenInstanceNames = tokenHolder.valuesAll.compactMapValues { $0.nameStringValue }
-        let configuration: TransactionConfirmationConfiguration = .sendNftTransaction(confirmType: .signThenSend, keystore: keystore, ethPrice: ethPrice, tokenInstanceNames: tokenInstanceNames)
+        let configuration: TransactionConfirmationConfiguration = .sendNftTransaction(confirmType: .signThenSend, keystore: keystore, tokenInstanceNames: tokenInstanceNames)
         let coordinator = TransactionConfirmationCoordinator(presentingViewController: navigationController, session: session, transaction: transaction, configuration: configuration, analyticsCoordinator: analyticsCoordinator)
         addCoordinator(coordinator)
         coordinator.delegate = self
@@ -132,8 +132,9 @@ extension TransferNFTCoordinator: ScanQRCodeCoordinatorDelegate {
 
 extension TransferNFTCoordinator: TransactionConfirmationCoordinatorDelegate {
     func coordinator(_ coordinator: TransactionConfirmationCoordinator, didFailTransaction error: AnyError) {
-        //TODO improve error message. Several of this delegate func
-        coordinator.navigationController.displayError(message: error.localizedDescription)
+        UIApplication.shared
+            .presentedViewController(or: navigationController)
+            .displayError(message: error.prettyError)
     }
 
     func didClose(in coordinator: TransactionConfirmationCoordinator) {
@@ -164,10 +165,12 @@ extension TransferNFTCoordinator: TransactionConfirmationCoordinatorDelegate {
 }
 
 extension TransferNFTCoordinator: TransactionInProgressCoordinatorDelegate {
-    func transactionInProgressDidDismiss(in coordinator: TransactionInProgressCoordinator) {
+    func didDismiss(in coordinator: TransactionInProgressCoordinator) {
         removeCoordinator(coordinator)
+        
         switch transactionConfirmationResult {
         case .some(let result):
+            let _ = lastViewControllerInNavigationStack.flatMap { navigationController.popToViewController($0, animated: true) }
             delegate?.didFinish(result, in: self)
         case .none:
             break

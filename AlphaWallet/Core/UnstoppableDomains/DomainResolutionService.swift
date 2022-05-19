@@ -8,14 +8,16 @@
 import Foundation
 import PromiseKit
 
-class DomainResolutionService: DomainResolutionServiceType {
+class DomainResolutionService {
     let server: RPCServer = .forResolvingEns
+}
 
+extension DomainResolutionService: DomainResolutionServiceType {
     func resolveAddress(string value: String) -> Promise<BlockieAndAddressOrEnsResolution> {
 
         func resolveBlockieImage(addr: AlphaWallet.Address) -> Promise<BlockieAndAddressOrEnsResolution> {
             BlockiesGenerator()
-                .promise(address: addr)
+                .promise(address: addr, ens: value)
                 .map { image -> BlockieAndAddressOrEnsResolution in
                     return (image, .resolved(.address(addr)))
                 }.recover { _ -> Promise<BlockieAndAddressOrEnsResolution> in
@@ -23,7 +25,7 @@ class DomainResolutionService: DomainResolutionServiceType {
                 }
         }
 
-        let getEnsAddressCoordinator = GetENSAddressCoordinator(server: server)
+        let getEnsAddressCoordinator = ENSResolver(server: server)
         let unstoppableDomainsV2Resolver = UnstoppableDomainsV2Resolver(server: server)
 
         let services: [CachebleAddressResolutionServiceType] = [
@@ -31,15 +33,14 @@ class DomainResolutionService: DomainResolutionServiceType {
             unstoppableDomainsV2Resolver
         ]
 
-        if let cached = services.compactMap({ $0.cachedAddressValue(for: value) }).first {
+        if let cached = services.compactMap({ $0.cachedAddressValue(forName: value) }).first {
             return resolveBlockieImage(addr: cached)
         }
 
         return getEnsAddressCoordinator
-            .getENSAddressFromResolver(for: value)
+            .getENSAddressFromResolver(forName: value)
             .recover { _ -> Promise<AlphaWallet.Address> in
-                unstoppableDomainsV2Resolver
-                    .resolveAddress(for: value)
+                unstoppableDomainsV2Resolver.resolveAddress(forName: value)
             }.then { addr -> Promise<BlockieAndAddressOrEnsResolution> in
                 resolveBlockieImage(addr: addr)
             }
@@ -57,7 +58,7 @@ class DomainResolutionService: DomainResolutionServiceType {
                 }
         }
 
-        let ensReverseLookupCoordinator = ENSReverseLookupCoordinator(server: server)
+        let ensReverseLookupCoordinator = ENSReverseResolver(server: server)
         let unstoppableDomainsV2Resolver = UnstoppableDomainsV2Resolver(server: server)
 
         let services: [CachedEnsResolutionServiceType] = [
@@ -65,7 +66,7 @@ class DomainResolutionService: DomainResolutionServiceType {
             unstoppableDomainsV2Resolver
         ]
 
-        if let cached = services.compactMap({ $0.cachedEnsValue(for: address) }).first {
+        if let cached = services.compactMap({ $0.cachedEnsValue(forAddress: address) }).first {
             return resolveBlockieImage(ens: cached)
         }
 

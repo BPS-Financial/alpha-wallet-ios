@@ -42,6 +42,18 @@ struct CollectiblePairs: Hashable {
     }
 }
 
+extension TokensViewModel {
+    enum Section: Equatable {
+        case walletSummary
+        case filters
+        case testnetTokens
+        case search
+        case tokens
+        case collectiblePairs
+        case activeWalletSession(count: Int)
+    }
+}
+
 //Must be a class, and not a struct, otherwise changing `filter` will silently create a copy of TokensViewModel when user taps to change the filter in the UI and break filtering
 class TokensViewModel {
     //Must be computed because localization can be overridden by user dynamically
@@ -58,13 +70,13 @@ class TokensViewModel {
         }
     }
     var walletConnectSessions: Int = 0
-    private (set) var sections: [TokensViewController.Section] = []
-    private var tokenListSection: TokensViewController.Section = .tokens
+    private (set) var sections: [Section] = []
+    private var tokenListSection: Section = .tokens
 
     private func refreshSections(walletConnectSessions count: Int) {
-        let varyTokenOrCollectiblePeirsSection: TokensViewController.Section = {
+        let varyTokenOrCollectiblePeirsSection: Section = {
             switch filter {
-            case .all, .currencyOnly, .keyword, .assetsOnly, .type:
+            case .all, .defi, .governance, .keyword, .assets, .type:
                 return .tokens
             case .collectiblesOnly:
                 return .collectiblePairs
@@ -74,8 +86,8 @@ class TokensViewModel {
         if isSearchActive {
             sections = [varyTokenOrCollectiblePeirsSection]
         } else {
-            let initialSections: [TokensViewController.Section]
-            let testnetHeaderSections: [TokensViewController.Section]
+            let initialSections: [Section]
+            let testnetHeaderSections: [Section]
 
             if config.enabledServers.allSatisfy({ $0.isTestnet }) {
                 testnetHeaderSections = [.testnetTokens]
@@ -126,23 +138,38 @@ class TokensViewModel {
     var shouldShowBackupPromptViewHolder: Bool {
         //TODO show the prompt in both ASSETS and COLLECTIBLES tab too
         switch filter {
-        case .all, .currencyOnly, .keyword:
+        case .all, .keyword:
             return true
-        case .assetsOnly, .collectiblesOnly, .type:
+        case .assets, .collectiblesOnly, .type, .defi, .governance:
             return false
         }
-    } 
+    }
 
     var hasContent: Bool {
         return !collectiblePairs.isEmpty
     }
-    
+
     var shouldShowCollectiblesCollectionView: Bool {
         switch filter {
-        case .all, .currencyOnly, .assetsOnly, .keyword, .type:
+        case .all, .defi, .governance, .assets, .keyword, .type:
             return false
         case .collectiblesOnly:
             return hasContent
+        }
+    }
+
+    func heightForHeaderInSection(for section: Int) -> CGFloat {
+        switch sections[section] {
+        case .walletSummary:
+            return 80
+        case .filters:
+            return DataEntry.Metric.Tokens.Filter.height
+        case .activeWalletSession:
+            return 80
+        case .search, .testnetTokens:
+            return DataEntry.Metric.AddHideToken.Header.height
+        case .tokens, .collectiblePairs:
+            return 0.01
         }
     }
 
@@ -152,7 +179,7 @@ class TokensViewModel {
             return 0
         case .tokens, .collectiblePairs:
             switch filter {
-            case .all, .currencyOnly, .keyword, .assetsOnly, .type:
+            case .all, .defi, .governance, .keyword, .assets, .type:
                 return filteredTokens.count
             case .collectiblesOnly:
                 return collectiblePairs.count
@@ -215,7 +242,7 @@ class TokensViewModel {
         let displayedTokens = tokensFilter.filterTokens(tokens: tokens, filter: filter)
         let tokens = tokensFilter.sortDisplayedTokens(tokens: displayedTokens)
         switch filter {
-        case .all, .type, .currencyOnly, .assetsOnly, .keyword:
+        case .all, .type, .defi, .governance, .assets, .keyword:
             return TokensViewModel.functional.groupTokenObjectsWithServers(tokens: tokens)
         case .collectiblesOnly:
             return tokens.map { .tokenObject($0) }
@@ -286,8 +313,9 @@ fileprivate extension WalletFilter {
     static var orderedTabs: [WalletFilter] {
         return [
             .all,
-            .currencyOnly,
-            .assetsOnly,
+            .defi,
+            .governance,
+            .assets,
             .collectiblesOnly,
         ]
     }
@@ -300,9 +328,11 @@ fileprivate extension WalletFilter {
         switch self {
         case .all:
             return R.string.localizable.aWalletContentsFilterAllTitle()
-        case .currencyOnly:
-            return R.string.localizable.aWalletContentsFilterCurrencyOnlyTitle()
-        case .assetsOnly:
+        case .defi:
+            return R.string.localizable.aWalletContentsFilterDefiTitle()
+        case .governance:
+            return R.string.localizable.aWalletContentsFilterGovernanceTitle()
+        case .assets:
             return R.string.localizable.aWalletContentsFilterAssetsOnlyTitle()
         case .collectiblesOnly:
             return R.string.localizable.aWalletContentsFilterCollectiblesOnlyTitle()

@@ -3,7 +3,6 @@
 import Foundation
 import LocalAuthentication
 @testable import AlphaWallet
-import TrustKeystore
 import Result
 
 struct FakeKeystore: Keystore {
@@ -30,23 +29,19 @@ struct FakeKeystore: Keystore {
     }
     var wallets: [Wallet]
     var recentlyUsedWallet: Wallet?
-    var subscribableWallets: Subscribable<Set<Wallet>>
-    var currentWallet: Wallet {
+    var currentWallet: Wallet? {
         //Better crash now instead of populating callers with optionals
         if let wallet = recentlyUsedWallet {
             return wallet
-        } else if wallets.count == 1 {
-            return wallets.first!
         } else {
-            fatalError("No wallet")
-        }
+            return wallets.first
+        } 
     }
-
+    
     init(wallets: [Wallet] = [], recentlyUsedWallet: Wallet? = .none, assumeAllWalletsType: AssumeAllWalletsType = .hdWallet) {
         self.wallets = wallets
         self.recentlyUsedWallet = recentlyUsedWallet ?? FakeKeystore.currentWallet
         self.assumeAllWalletsType = assumeAllWalletsType
-        self.subscribableWallets = .init(Set(wallets))
     }
 
     func verifySeedPhraseOfHdWallet(_ inputSeedPhrase: String, forAccount account: AlphaWallet.Address, context: LAContext, completion: @escaping (Result<Bool, KeystoreError>) -> Void) {
@@ -128,7 +123,6 @@ struct FakeKeystore: Keystore {
     func elevateSecurity(forAccount account: AlphaWallet.Address) -> Bool {
         return false
     }
-
 
     func signMessageBulk(_ data: [Data], for account: AlphaWallet.Address) -> Result<[Data], KeystoreError> {
         return .failure(KeystoreError.failedToSignMessage)

@@ -2,6 +2,7 @@
 
 import UIKit
 import BigInt
+import Combine
 
 protocol EnterSellTokensCardPriceQuantityViewControllerDelegate: class, CanOpenURL {
     func didEnterSellTokensPriceQuantity(token: TokenObject, tokenHolder: TokenHolder, ethCost: Ether, in viewController: EnterSellTokensCardPriceQuantityViewController)
@@ -10,7 +11,6 @@ protocol EnterSellTokensCardPriceQuantityViewControllerDelegate: class, CanOpenU
 
 class EnterSellTokensCardPriceQuantityViewController: UIViewController, TokenVerifiableStatusViewController {
     private let analyticsCoordinator: AnalyticsCoordinator
-    private let storage: TokensDataStore
     private let roundedBackground = RoundedBackground()
     private let scrollView = UIScrollView()
     private let header = TokensCardViewControllerTitleHeader()
@@ -22,7 +22,7 @@ class EnterSellTokensCardPriceQuantityViewController: UIViewController, TokenVer
     private let dollarCostLabelLabel = UILabel()
     private let dollarCostLabel = PaddedLabel()
     private let tokenRowView: TokenRowView & UIView
-    private let buttonsBar = ButtonsBar(configuration: .primary(buttons: 1))
+    private let buttonsBar = HorizontalButtonsBar(configuration: .primary(buttons: 1))
     private var viewModel: EnterSellTokensCardPriceQuantityViewControllerViewModel
     private var totalEthCost: Ether {
         if let ethCostPerToken = Ether(string: pricePerTokenField.ethCost) {
@@ -54,10 +54,11 @@ class EnterSellTokensCardPriceQuantityViewController: UIViewController, TokenVer
     let paymentFlow: PaymentFlow
     weak var delegate: EnterSellTokensCardPriceQuantityViewControllerDelegate?
     private let walletSession: WalletSession
+    private var cancelable = Set<AnyCancellable>()
+
 // swiftlint:disable function_body_length
     init(
             analyticsCoordinator: AnalyticsCoordinator,
-            storage: TokensDataStore,
             paymentFlow: PaymentFlow,
             viewModel: EnterSellTokensCardPriceQuantityViewControllerViewModel,
             assetDefinitionStore: AssetDefinitionStore,
@@ -65,7 +66,6 @@ class EnterSellTokensCardPriceQuantityViewController: UIViewController, TokenVer
             keystore: Keystore
     ) {
         self.analyticsCoordinator = analyticsCoordinator
-        self.storage = storage
         self.paymentFlow = paymentFlow
         self.walletSession = walletSession
         self.viewModel = viewModel
@@ -98,11 +98,16 @@ class EnterSellTokensCardPriceQuantityViewController: UIViewController, TokenVer
         dollarCostLabelLabel.translatesAutoresizingMaskIntoConstraints = false
         dollarCostLabel.translatesAutoresizingMaskIntoConstraints = false
         pricePerTokenField.translatesAutoresizingMaskIntoConstraints = false
-        walletSession.balanceCoordinator.subscribableEthBalanceViewModel.subscribe { [weak self] value in
-            if let value = value?.ticker.flatMap({ NSDecimalNumber(value: $0.price_usd) }) {
-                self?.pricePerTokenField.cryptoToDollarRate = value
-            }
-        }
+
+        walletSession
+            .tokenBalanceService
+            .etherToFiatRatePublisher
+            .map { $0.flatMap { NSDecimalNumber(value: $0) } }
+            .receive(on: RunLoop.main)
+            .sink { [weak pricePerTokenField] value in
+                pricePerTokenField?.cryptoToDollarRate = value
+            }.store(in: &cancelable)
+
         pricePerTokenField.delegate = self
         ethCostLabel.translatesAutoresizingMaskIntoConstraints = false
         quantityStepper.translatesAutoresizingMaskIntoConstraints = false
@@ -195,11 +200,11 @@ class EnterSellTokensCardPriceQuantityViewController: UIViewController, TokenVer
             buttonsBar.leadingAnchor.constraint(equalTo: footerBar.leadingAnchor),
             buttonsBar.trailingAnchor.constraint(equalTo: footerBar.trailingAnchor),
             buttonsBar.topAnchor.constraint(equalTo: footerBar.topAnchor),
-            buttonsBar.heightAnchor.constraint(equalToConstant: ButtonsBar.buttonsHeight),
+            buttonsBar.heightAnchor.constraint(equalToConstant: HorizontalButtonsBar.buttonsHeight),
 
             footerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            footerBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -ButtonsBar.buttonsHeight - ButtonsBar.marginAtBottomScreen),
+            footerBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -HorizontalButtonsBar.buttonsHeight - HorizontalButtonsBar.marginAtBottomScreen),
             footerBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),

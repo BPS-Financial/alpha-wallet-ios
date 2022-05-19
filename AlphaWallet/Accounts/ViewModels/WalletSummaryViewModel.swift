@@ -6,30 +6,43 @@
 //
 
 import UIKit
+import Combine
 
 struct WalletSummaryViewModel {
-    private let summary: WalletSummary?
     private let alignment: NSTextAlignment
     private var areTestnetsEnabled: Bool {
         config.enabledServers.allSatisfy { $0.isTestnet }
     }
     private let config: Config
+    private let walletSummary: AnyPublisher<WalletSummary, Never>
 
-    init(summary: WalletSummary?, config: Config, alignment: NSTextAlignment = .left) {
-        self.summary = summary
+    init(walletSummary: AnyPublisher<WalletSummary, Never>, config: Config, alignment: NSTextAlignment = .left) {
+        self.walletSummary = walletSummary
         self.alignment = alignment
         self.config = config
     }
 
-    var balanceAttributedString: NSAttributedString {
+    var balanceAttributedString: AnyPublisher<NSAttributedString, Never> {
+        walletSummary
+            .map { createbalanceAttributedString(summary: $0) }
+            .eraseToAnyPublisher()
+    }
+
+    var apprecation24HoursAttributedString: AnyPublisher<NSAttributedString, Never> {
+        walletSummary
+            .compactMap { createApprecationAttributedString(summary: $0) }
+            .eraseToAnyPublisher()
+    }
+
+    private func createbalanceAttributedString(summary: WalletSummary) -> NSAttributedString {
         if areTestnetsEnabled {
             return .init(string: "Testnet", attributes: Self.functional.walletBalanceAttributes(alignment: alignment))
         } else {
-            return .init(string: summary?.totalAmount ?? "--", attributes: Self.functional.walletBalanceAttributes(alignment: alignment))
+            return .init(string: summary.totalAmount, attributes: Self.functional.walletBalanceAttributes(alignment: alignment))
         }
     }
 
-    var apprecation24HoursAttributedString: NSAttributedString {
+    private func createApprecationAttributedString(summary: WalletSummary) -> NSAttributedString {
         if areTestnetsEnabled {
             return .init(string: "Testnet Mode", attributes: Self.functional.apprecation24HoursAttributes(alignment: alignment, foregroundColor: .gray))
         } else {

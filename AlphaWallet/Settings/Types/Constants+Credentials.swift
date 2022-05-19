@@ -4,7 +4,7 @@ import Foundation
 
 extension Constants {
     enum Credentials {
-        static let infuraKey = "da3717f25f824cc1baa32d812386d93f"
+        static let infuraKey = "ad6d834b7a1e4d03a7fde92020616149"
         static let etherscanKey = "1PX7RG8H4HTDY8X55YRMCAKPZK476M23ZR"
         static let binanceSmartChainExplorerApiKey: String? = nil
         static let polygonScanExplorerApiKey: String? = nil
@@ -18,6 +18,6 @@ extension Constants {
         static let walletConnectProjectId = "6eb1175ea3e57209d8f8f39bd4213691"
         static let unstoppableDomainsV2ApiKey = "Bearer rLuujk_dLBN-JDE6Xl8QSCg-FeIouRKM"
         static let blockscanChatProxyKey = ""
-        static let statHatKey = ""
+        static let covalentApiKey = "ckey_7ee61be7f8364ba784f697510bd"
     }
 }

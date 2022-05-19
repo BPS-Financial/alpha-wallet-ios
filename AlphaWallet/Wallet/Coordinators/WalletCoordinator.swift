@@ -52,7 +52,7 @@ class WalletCoordinator: Coordinator {
             createInstantWallet()
             return false
         case .addInitialWallet:
-            let controller = CreateInitialWalletViewController(keystore: keystore, analyticsCoordinator: analyticsCoordinator)
+            let controller = CreateInitialWalletViewController(keystore: keystore)
             controller.delegate = self
             controller.configure()
             navigationController.viewControllers = [controller]
@@ -131,9 +131,9 @@ class WalletCoordinator: Coordinator {
 extension WalletCoordinator: ImportWalletViewControllerDelegate {
 
     func openQRCode(in controller: ImportWalletViewController) {
-        guard navigationController.ensureHasDeviceAuthorization() else { return }
-        let scanQRCodeCoordinator = ScanQRCodeCoordinator(analyticsCoordinator: analyticsCoordinator, navigationController: navigationController, account: keystore.recentlyUsedWallet)
-        let coordinator = QRCodeResolutionCoordinator(config: config, coordinator: scanQRCodeCoordinator, usage: .importWalletOnly)
+        guard let wallet = keystore.currentWallet, navigationController.ensureHasDeviceAuthorization() else { return }
+        let scanQRCodeCoordinator = ScanQRCodeCoordinator(analyticsCoordinator: analyticsCoordinator, navigationController: navigationController, account: wallet)
+        let coordinator = QRCodeResolutionCoordinator(config: config, coordinator: scanQRCodeCoordinator, usage: .importWalletOnly, account: wallet)
         coordinator.delegate = self
         addCoordinator(coordinator)
         coordinator.start(fromSource: .importWalletScreen)

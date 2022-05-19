@@ -16,17 +16,17 @@ class SendCoordinator: Coordinator {
     private let session: WalletSession
     private let keystore: Keystore
     private let tokensDataStore: TokensDataStore
-    private let ethPrice: Subscribable<Double>
     private let assetDefinitionStore: AssetDefinitionStore
     private let analyticsCoordinator: AnalyticsCoordinator
-    private var transactionConfirmationResult: ConfirmResult? = .none
+    private var confirmResult: ConfirmResult? = .none
+    private var lastViewControllerInNavigationStack: UIViewController?
 
+    let navigationController: UINavigationController
+    var coordinators: [Coordinator] = []
     lazy var sendViewController: SendViewController = {
         return makeSendViewController()
     }()
 
-    let navigationController: UINavigationController
-    var coordinators: [Coordinator] = []
     weak var delegate: SendCoordinatorDelegate?
 
     init(
@@ -35,7 +35,6 @@ class SendCoordinator: Coordinator {
             session: WalletSession,
             keystore: Keystore,
             tokensDataStore: TokensDataStore,
-            ethPrice: Subscribable<Double>,
             assetDefinitionStore: AssetDefinitionStore,
             analyticsCoordinator: AnalyticsCoordinator
     ) {
@@ -44,9 +43,10 @@ class SendCoordinator: Coordinator {
         self.session = session
         self.keystore = keystore
         self.tokensDataStore = tokensDataStore
-        self.ethPrice = ethPrice
         self.assetDefinitionStore = assetDefinitionStore
         self.analyticsCoordinator = analyticsCoordinator
+
+        self.lastViewControllerInNavigationStack = navigationController.viewControllers.last
     }
 
     func start() {
@@ -59,8 +59,7 @@ class SendCoordinator: Coordinator {
         let controller = SendViewController(
             session: session,
             tokensDataStore: tokensDataStore,
-            transactionType: transactionType,
-            cryptoPrice: ethPrice
+            transactionType: transactionType
         )
 
         switch transactionType {
@@ -74,7 +73,7 @@ class SendCoordinator: Coordinator {
         case .erc20Token(_, let destination, let amount):
             controller.targetAddressTextField.value = destination?.stringValue ?? ""
             controller.amountTextField.ethCost = amount ?? ""
-        case .erc875Token, .erc875TokenOrder, .erc721Token, .erc721ForTicketToken, .erc1155Token, .dapp, .tokenScript, .claimPaidErc875MagicLink:
+        case .erc875Token, .erc875TokenOrder, .erc721Token, .erc721ForTicketToken, .erc1155Token, .dapp, .tokenScript, .claimPaidErc875MagicLink, .prebuilt:
             break
         }
         controller.delegate = self
@@ -117,8 +116,7 @@ extension SendCoordinator: SendViewControllerDelegate {
             confirmType: .signThenSend,
             keystore: keystore,
             assetDefinitionStore: assetDefinitionStore,
-            amount: FungiblesTransactionAmount(value: amount, shortValue: shortValue, isAllFunds: viewController.isAllFunds),
-            ethPrice: ethPrice
+            amount: FungiblesTransactionAmount(value: amount, shortValue: shortValue, isAllFunds: viewController.isAllFunds)
         )
         let coordinator = TransactionConfirmationCoordinator(presentingViewController: navigationController, session: session, transaction: transaction, configuration: configuration, analyticsCoordinator: analyticsCoordinator)
         addCoordinator(coordinator)
@@ -133,8 +131,9 @@ extension SendCoordinator: SendViewControllerDelegate {
 
 extension SendCoordinator: TransactionConfirmationCoordinatorDelegate {
     func coordinator(_ coordinator: TransactionConfirmationCoordinator, didFailTransaction error: AnyError) {
-        //TODO improve error message. Several of this delegate func
-        coordinator.navigationController.displayError(message: error.prettyError)
+        UIApplication.shared
+            .presentedViewController(or: navigationController)
+            .displayError(message: error.prettyError)
     }
 
     func didSendTransaction(_ transaction: SentTransaction, inCoordinator coordinator: TransactionConfirmationCoordinator) {
@@ -147,7 +146,7 @@ extension SendCoordinator: TransactionConfirmationCoordinatorDelegate {
 
             strongSelf.removeCoordinator(coordinator)
 
-            strongSelf.transactionConfirmationResult = result
+            strongSelf.confirmResult = result
 
             let coordinator = TransactionInProgressCoordinator(presentingViewController: strongSelf.navigationController)
             coordinator.delegate = strongSelf
@@ -168,9 +167,12 @@ extension SendCoordinator: TransactionConfirmationCoordinatorDelegate {
 
 extension SendCoordinator: TransactionInProgressCoordinatorDelegate {
 
-    func transactionInProgressDidDismiss(in coordinator: TransactionInProgressCoordinator) {
-        switch transactionConfirmationResult {
+    func didDismiss(in coordinator: TransactionInProgressCoordinator) {
+        removeCoordinator(coordinator)
+
+        switch confirmResult {
         case .some(let result):
+            let _ = lastViewControllerInNavigationStack.flatMap { navigationController.popToViewController($0, animated: true) }
             delegate?.didFinish(result, in: self)
         case .none:
             break

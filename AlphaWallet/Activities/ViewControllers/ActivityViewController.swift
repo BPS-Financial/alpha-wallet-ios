@@ -1,6 +1,7 @@
 // Copyright © 2020 Stormbird PTE. LTD.
 
 import UIKit
+import Combine
 
 protocol ActivityViewControllerDelegate: AnyObject {
     func reinject(viewController: ActivityViewController)
@@ -16,7 +17,7 @@ class ActivityViewController: UIViewController {
     private let roundedBackground = RoundedBackground()
     private let wallet: Wallet
     private let assetDefinitionStore: AssetDefinitionStore
-    private let buttonsBar = ButtonsBar(configuration: .primary(buttons: 1))
+    private let buttonsBar = HorizontalButtonsBar(configuration: .primary(buttons: 1))
     private let tokenImageView = TokenImageView()
     private let stateView = ActivityStateView()
     private let titleLabel = UILabel()
@@ -43,8 +44,8 @@ class ActivityViewController: UIViewController {
 
     weak var delegate: ActivityViewControllerDelegate?
     private let service: ActivitiesServiceType
-    private var subscriptionKey: Subscribable<Activity>.SubscribableKey?
     private let keystore: Keystore
+    private var cancelable = Set<AnyCancellable>()
 
     init(analyticsCoordinator: AnalyticsCoordinator, wallet: Wallet, assetDefinitionStore: AssetDefinitionStore, viewModel: ActivityViewModel, service: ActivitiesServiceType, keystore: Keystore) {
         self.keystore = keystore
@@ -105,7 +106,7 @@ class ActivityViewController: UIViewController {
             separator.leadingAnchor.constraint(equalTo: stackView.leadingAnchor, constant: 20),
             separator.trailingAnchor.constraint(equalTo: stackView.trailingAnchor, constant: -20),
             separator.heightAnchor.constraint(equalToConstant: GroupedTable.Metric.cellSeparatorHeight),
-            stackView.anchorsConstraint(to: roundedBackground),
+            stackView.anchorsConstraintSafeArea(to: roundedBackground),
 
             tokenScriptRendererView.widthAnchor.constraint(equalTo: stackView.widthAnchor),
 
@@ -117,11 +118,13 @@ class ActivityViewController: UIViewController {
 
         configure(viewModel: viewModel)
 
-        subscriptionKey = service.subscribableUpdatedActivity.subscribe { [weak self] activity in
-            guard let strongSelf = self, let activity = activity, strongSelf.isForActivity(activity) else { return }
+        service.didUpdateActivityPublisher
+            .receive(on: RunLoop.main)
+            .sink { [weak self] activity in
+                guard let strongSelf = self, strongSelf.isForActivity(activity) else { return }
 
-            strongSelf.configure(viewModel: .init(activity: activity))
-        }
+                strongSelf.configure(viewModel: .init(activity: activity))
+            }.store(in: &cancelable)
     }
 
     required init?(coder aDecoder: NSCoder) {
@@ -179,7 +182,7 @@ class ActivityViewController: UIViewController {
         }
 
         buttonsBar.viewController = self
-        if Features.isSpeedupAndCancelEnabled && viewModel.isPendingTransaction {
+        if Features.default.isAvailable(.isSpeedupAndCancelEnabled) && viewModel.isPendingTransaction {
             buttonsBar.configure(.combined(buttons: 3))
             configureSpeedupButton(buttonsBar.buttons[0])
             configureCancelButton(buttonsBar.buttons[1])

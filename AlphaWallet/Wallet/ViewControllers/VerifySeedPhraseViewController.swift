@@ -39,8 +39,7 @@ class VerifySeedPhraseViewController: UIViewController {
     private let seedPhraseTextView = UITextView()
     private let seedPhraseCollectionView = SeedPhraseCollectionView()
     private let errorLabel = UILabel()
-    private let clearChooseSeedPhraseButton = UIButton(type: .system)
-    private let buttonsBar = ButtonsBar(configuration: .primary(buttons: 1))
+    private let buttonsBar = VerticalButtonsBar(numberOfButtons: 2)
     private var state: State {
         didSet {
             switch state {
@@ -65,7 +64,7 @@ class VerifySeedPhraseViewController: UIViewController {
             case .notDisplayedSeedPhrase:
                 seedPhraseCollectionView.viewModel = .init(words: [], isSelectable: true)
                 seedPhraseTextView.text = ""
-                clearChooseSeedPhraseButton.isHidden = true
+                buttonsBar.hideButtonInStack(button: clearChooseSeedPhraseButton)
                 continueButton.isEnabled = false
             case .errorDisplaySeedPhrase(let error):
                 seedPhraseCollectionView.viewModel = .init(words: [], isSelectable: true)
@@ -92,6 +91,9 @@ class VerifySeedPhraseViewController: UIViewController {
         }
 
     }
+    private var clearChooseSeedPhraseButton: UIButton {
+        return buttonsBar.buttons[1]
+    }
     private var continueButton: UIButton {
         return buttonsBar.buttons[0]
     }
@@ -110,7 +112,6 @@ class VerifySeedPhraseViewController: UIViewController {
         seedPhraseCollectionView.seedPhraseDelegate = self
 
         roundedBackground.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(roundedBackground)
 
         seedPhraseTextView.isEditable = false
         //Disable copying
@@ -129,12 +130,12 @@ class VerifySeedPhraseViewController: UIViewController {
         ].asStackView(axis: .vertical)
         stackView.translatesAutoresizingMaskIntoConstraints = false
         roundedBackground.addSubview(stackView)
+        view.addSubview(roundedBackground)
 
-        clearChooseSeedPhraseButton.isHidden = true
-        clearChooseSeedPhraseButton.translatesAutoresizingMaskIntoConstraints = false
-        roundedBackground.addSubview(clearChooseSeedPhraseButton)
-
+        buttonsBar.hideButtonInStack(button: clearChooseSeedPhraseButton)
         continueButton.isEnabled = false
+        roundedBackground.addSubview(buttonsBar)
+        seedPhraseTextView.becomeFirstResponder()
 
         let footerBar = UIView()
         footerBar.translatesAutoresizingMaskIntoConstraints = false
@@ -143,29 +144,23 @@ class VerifySeedPhraseViewController: UIViewController {
 
         footerBar.addSubview(buttonsBar)
 
-        seedPhraseTextView.becomeFirstResponder()
-
         NSLayoutConstraint.activate([
             seedPhraseTextView.heightAnchor.constraint(equalToConstant: ScreenChecker().isNarrowScreen ? 100: 140),
 
-            stackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            stackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            stackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20.0),
+            stackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20.0),
             stackView.topAnchor.constraint(equalTo: view.topAnchor),
-            stackView.bottomAnchor.constraint(equalTo: clearChooseSeedPhraseButton.topAnchor, constant: -7),
+            stackView.bottomAnchor.constraint(equalTo: buttonsBar.topAnchor),
 
-            clearChooseSeedPhraseButton.leadingAnchor.constraint(equalTo: footerBar.leadingAnchor, constant: 10),
-            clearChooseSeedPhraseButton.trailingAnchor.constraint(equalTo: footerBar.trailingAnchor, constant: -10),
-            clearChooseSeedPhraseButton.bottomAnchor.constraint(equalTo: footerBar.topAnchor, constant: -10),
-
-            buttonsBar.leadingAnchor.constraint(equalTo: footerBar.leadingAnchor),
-            buttonsBar.trailingAnchor.constraint(equalTo: footerBar.trailingAnchor),
+            buttonsBar.leadingAnchor.constraint(equalTo: footerBar.leadingAnchor, constant: 20.0),
+            buttonsBar.trailingAnchor.constraint(equalTo: footerBar.trailingAnchor, constant: -20.0),
             buttonsBar.topAnchor.constraint(equalTo: footerBar.topAnchor),
-            buttonsBar.heightAnchor.constraint(equalToConstant: ButtonsBar.buttonsHeight),
+            buttonsBar.bottomAnchor.constraint(equalTo: footerBar.bottomAnchor),
 
             footerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            footerBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -ButtonsBar.buttonsHeight - ButtonsBar.marginAtBottomScreen),
-            footerBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            footerBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor).set(priority: .defaultHigh),
+            footerBar.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -Style.insets.safeBottom).set(priority: .required),
 
             roundedBackground.createConstraintsWithContainer(view: view),
         ])
@@ -252,7 +247,6 @@ class VerifySeedPhraseViewController: UIViewController {
         clearChooseSeedPhraseButton.titleLabel?.font = viewModel.importKeystoreJsonButtonFont
         clearChooseSeedPhraseButton.titleLabel?.adjustsFontSizeToFitWidth = true
 
-        buttonsBar.configure()
         continueButton.setTitle(R.string.localizable.walletsVerifySeedPhraseTitle(), for: .normal)
         continueButton.addTarget(self, action: #selector(verify), for: .touchUpInside)
     }
@@ -260,7 +254,7 @@ class VerifySeedPhraseViewController: UIViewController {
     @objc func clearChosenSeedPhrases() {
         seedPhraseTextView.text = ""
         seedPhraseCollectionView.viewModel.clearSelectedWords()
-        clearChooseSeedPhraseButton.isHidden = true
+        buttonsBar.hideButtonInStack(button: clearChooseSeedPhraseButton)
         continueButton.isEnabled = false
         state = .editingSeedPhrase(words: state.words)
     }
@@ -326,11 +320,10 @@ extension VerifySeedPhraseViewController: SeedPhraseCollectionViewDelegate {
         }
         clearError()
         if collectionView.viewModel.isEveryWordSelected {
-            //Deliberately hide the Clear button after user has chosen all the words, as they are likely to want to verify now and we don't want them to accidentally hit the Clear button
-            clearChooseSeedPhraseButton.isHidden = true
+            buttonsBar.showButtonInStack(button: clearChooseSeedPhraseButton, position: 1)
             continueButton.isEnabled = true
         } else {
-            clearChooseSeedPhraseButton.isHidden = false
+            buttonsBar.showButtonInStack(button: clearChooseSeedPhraseButton, position: 1)
             continueButton.isEnabled = false
         }
     }

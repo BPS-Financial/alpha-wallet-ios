@@ -16,11 +16,12 @@ protocol AdvancedSettingsViewControllerDelegate: AnyObject {
     func advancedSettingsViewControllerAnalyticsSelected(in controller: AdvancedSettingsViewController)
     func advancedSettingsViewControllerUsePrivateNetworkSelected(in controller: AdvancedSettingsViewController)
     func advancedSettingsViewControllerExportJSONKeystoreSelected(in controller: AdvancedSettingsViewController)
+    func advancedSettingsViewControllerFeaturesSelected(in controller: AdvancedSettingsViewController)
 }
 
 class AdvancedSettingsViewController: UIViewController {
 
-    private lazy var viewModel: AdvancedSettingsViewModel = AdvancedSettingsViewModel(keystore: keystore)
+    private lazy var viewModel: AdvancedSettingsViewModel = AdvancedSettingsViewModel(wallet: wallet)
     private lazy var tableView: UITableView = {
         let tableView = UITableView(frame: .zero, style: .grouped)
         tableView.tableFooterView = UIView.tableFooterToRemoveEmptyCellSeparators()
@@ -35,12 +36,12 @@ class AdvancedSettingsViewController: UIViewController {
     }()
     private let roundedBackground = RoundedBackground()
     private var config: Config
-    private let keystore: Keystore
+    private let wallet: Wallet
     weak var delegate: AdvancedSettingsViewControllerDelegate?
 
-    init(keystore: Keystore, config: Config) {
+    init(wallet: Wallet, config: Config) {
         self.config = config
-        self.keystore = keystore
+        self.wallet = wallet
         super.init(nibName: nil, bundle: nil)
 
         roundedBackground.backgroundColor = GroupedTable.Color.background
@@ -81,7 +82,7 @@ extension AdvancedSettingsViewController: UITableViewDataSource {
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let row = viewModel.rows[indexPath.row]
         switch row {
-        case .analytics, .changeCurrency, .changeLanguage, .clearBrowserCache, .tools, .tokenScript, .exportJSONKeystore:
+        case .analytics, .changeCurrency, .changeLanguage, .clearBrowserCache, .tools, .tokenScript, .exportJSONKeystore, .features:
             let cell: SettingTableViewCell = tableView.dequeueReusableCell(for: indexPath)
             cell.configure(viewModel: .init(titleText: row.title, subTitleText: nil, icon: row.icon))
             return cell
@@ -136,6 +137,8 @@ extension AdvancedSettingsViewController: UITableViewDelegate {
             delegate?.advancedSettingsViewControllerUsePrivateNetworkSelected(in: self)
         case .exportJSONKeystore:
             delegate?.advancedSettingsViewControllerExportJSONKeystoreSelected(in: self)
+        case .features:
+            delegate?.advancedSettingsViewControllerFeaturesSelected(in: self)
         }
     }
 }

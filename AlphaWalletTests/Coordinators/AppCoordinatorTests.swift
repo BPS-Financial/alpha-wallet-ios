@@ -10,7 +10,8 @@ class AppCoordinatorTests: XCTestCase {
             let coordinator = try AppCoordinator(
                 window: UIWindow(),
                 analyticsService: FakeAnalyticsService(),
-                keystore: FakeKeystore()
+                keystore: FakeKeystore(),
+                walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test)
             )
 
             XCTAssertTrue(coordinator.navigationController.viewControllers[0].isSplashScreen)
@@ -30,12 +31,13 @@ class AppCoordinatorTests: XCTestCase {
                     wallets: [.make()],
                     recentlyUsedWallet: .make()
                 ),
+                walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test),
                 navigationController: FakeNavigationController()
             )
 
             coordinator.start()
 
-            XCTAssertEqual(6, coordinator.coordinators.count)
+            XCTAssertEqual(4, coordinator.coordinators.count)
 
             XCTAssertTrue(coordinator.navigationController.viewControllers[0] is AccountsViewController)
             XCTAssertTrue(coordinator.navigationController.viewControllers[1] is UITabBarController)
@@ -52,7 +54,8 @@ class AppCoordinatorTests: XCTestCase {
                 keystore: FakeKeystore(
                     wallets: [.make()],
                     recentlyUsedWallet: .make()
-                )
+                ),
+                walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test)
             )
             coordinator.start()
             coordinator.reset()
@@ -72,6 +75,7 @@ class AppCoordinatorTests: XCTestCase {
                     wallets: [.make()],
                     recentlyUsedWallet: .make()
                 ),
+                walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test),
                 navigationController: FakeNavigationController()
             )
             coordinator.start()
@@ -92,13 +96,14 @@ class AppCoordinatorTests: XCTestCase {
                     wallets: [.make()],
                     recentlyUsedWallet: .make()
                 ),
+                walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test),
                 navigationController: FakeNavigationController()
             )
             coordinator.start()
 
-            coordinator.showTransactions(for: .make(), animated: true)
+            coordinator.showActiveWallet(for: .make(), animated: true)
 
-            XCTAssertEqual(8, coordinator.coordinators.count)
+            XCTAssertEqual(6, coordinator.coordinators.count)
             XCTAssertTrue(coordinator.navigationController.viewControllers[0] is AccountsViewController)
             XCTAssertTrue(coordinator.navigationController.viewControllers[1] is UITabBarController)
         } catch {
@@ -114,12 +119,13 @@ class AppCoordinatorTests: XCTestCase {
                 keystore: FakeKeystore(
                     wallets: [.make()],
                     recentlyUsedWallet: .make()
-                )
+                ),
+                walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test)
             )
 
             coordinator.start()
 
-            XCTAssertNotNil(coordinator.inCoordinator)
+            XCTAssertNotNil(coordinator.activeWalletCoordinator)
         } catch {
             XCTAssertThrowsError(error)
         }
@@ -130,12 +136,13 @@ class AppCoordinatorTests: XCTestCase {
             let coordinator = try AppCoordinator(
                 window: .init(),
                 analyticsService: FakeAnalyticsService(),
-                keystore: FakeKeystore()
+                keystore: FakeKeystore(),
+                walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .standardOrForTests)
             )
 
             coordinator.start()
 
-            XCTAssertNil(coordinator.inCoordinator)
+            XCTAssertNil(coordinator.activeWalletCoordinator)
         } catch {
             XCTAssertThrowsError(error)
         }
@@ -145,12 +152,12 @@ class AppCoordinatorTests: XCTestCase {
 class FakeAnalyticsService: AnalyticsServiceType {
     func log(action: AnalyticsAction, properties: [String: AnalyticsEventPropertyValue]?) { }
     func log(error: AnalyticsError, properties: [String: AnalyticsEventPropertyValue]?) { }
+    func log(stat: AnalyticsStat, properties: [String: AnalyticsEventPropertyValue]?) {}
     func applicationDidBecomeActive() { }
     func application(continue userActivity: NSUserActivity) { }
     func application(open url: URL, sourceApplication: String?, annotation: Any) { }
     func application(open url: URL, options: [UIApplication.OpenURLOptionsKey: Any]) { }
     func application(didReceiveRemoteNotification userInfo: [AnyHashable: Any]) { }
-    func add(pushDeviceToken token: Data) { }
     func log(navigation: AnalyticsNavigation, properties: [String: AnalyticsEventPropertyValue]?) {}
     func setUser(property: AnalyticsUserProperty, value: AnalyticsEventPropertyValue) { }
     func incrementUser(property: AnalyticsUserProperty, by value: Int) { }

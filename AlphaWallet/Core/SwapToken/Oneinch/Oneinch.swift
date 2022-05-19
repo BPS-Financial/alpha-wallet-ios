@@ -6,11 +6,16 @@
 //
 
 import Foundation
+import Combine
 import PromiseKit
 import Moya
 
-class Oneinch: TokenActionsProvider, SwapTokenURLProviderType {
-
+class Oneinch: SupportedTokenActionsProvider, SwapTokenViaUrlProvider {
+    var objectWillChange: AnyPublisher<Void, Never> {
+        objectWillChangeSubject.eraseToAnyPublisher()
+    }
+    private var objectWillChangeSubject = PassthroughSubject<Void, Never>()
+    
     var action: String {
         return R.string.localizable.aWalletTokenErc20ExchangeOn1inchButtonTitle()
     }
@@ -37,7 +42,7 @@ class Oneinch: TokenActionsProvider, SwapTokenURLProviderType {
         .init(symbol: "ETH", name: "ETH", address: Constants.nativeCryptoAddressInDatabase, decimal: RPCServer.main.decimals)
     ]
     //NOTE: we use dictionary to improve search tokens
-    private var availableTokens: [AlphaWallet.Address: Oneinch.ERC20Token] = [:]
+    private var availableTokens: AtomicDictionary<AlphaWallet.Address, Oneinch.ERC20Token> = .init()
     private let queue = DispatchQueue(label: "com.Oneinch.updateQueue")
 
     func url(token: TokenActionsServiceKey) -> URL? {
@@ -65,7 +70,7 @@ class Oneinch: TokenActionsProvider, SwapTokenURLProviderType {
         switch token.server {
         case .main, .arbitrum:
             return availableTokens[token.contractAddress] != nil
-        case .kovan, .ropsten, .rinkeby, .sokol, .goerli, .artis_sigma1, .artis_tau1, .custom, .poa, .callisto, .xDai, .classic, .binance_smart_chain, .binance_smart_chain_testnet, .heco, .heco_testnet, .fantom, .fantom_testnet, .avalanche, .avalanche_testnet, .polygon, .mumbai_testnet, .optimistic, .optimisticKovan, .cronosTestnet, .palm, .palmTestnet, .arbitrumRinkeby:
+        case .kovan, .ropsten, .rinkeby, .sokol, .goerli, .artis_sigma1, .artis_tau1, .custom, .poa, .callisto, .xDai, .classic, .binance_smart_chain, .binance_smart_chain_testnet, .heco, .heco_testnet, .fantom, .fantom_testnet, .avalanche, .avalanche_testnet, .polygon, .mumbai_testnet, .optimistic, .optimisticKovan, .cronosTestnet, .palm, .palmTestnet, .arbitrumRinkeby, .klaytnCypress, .klaytnBaobabTestnet:
             return false
         }
     }
@@ -74,23 +79,28 @@ class Oneinch: TokenActionsProvider, SwapTokenURLProviderType {
         return availableTokens[address]
     }
 
-    func fetchSupportedTokens() {
-        let config = Config()
+    func start() {
+        queue.async {
+            self.fetchSupportedTokens()
+        }
+    }
+
+    private func fetchSupportedTokens() {
         let provider = AlphaWalletProviderFactory.makeProvider()
 
-        provider.request(.oneInchTokens(config: config), callbackQueue: queue).map(on: queue, { response -> [String: Oneinch.ERC20Token] in
-            try JSONDecoder().decode(ApiResponsePayload.self, from: response.data).tokens
-        }).map(on: queue, { data -> [Oneinch.ERC20Token] in
-            data.map { $0.value }
-        }).done(on: queue, { response in
-            for token in self.predefinedTokens + response {
-                self.availableTokens[token.address] = token
-            }
-        }).catch(on: queue, { error in
-            let service = AlphaWalletService.oneInchTokens(config: config)
-            let url = service.baseURL.appendingPathComponent(service.path)
-            RemoteLogger.instance.logRpcOrOtherWebError("Oneinch error | \(error)", url: url.absoluteString)
-        })
+        provider.request(.oneInchTokens, callbackQueue: queue)
+            .map(on: queue, { response -> [Oneinch.ERC20Token] in
+                try JSONDecoder().decode(ApiResponsePayload.self, from: response.data).tokens.map { $0.value }
+            }).done(on: queue, { response in
+                for token in self.predefinedTokens + response {
+                    self.availableTokens[token.address] = token
+                }
+                self.objectWillChangeSubject.send()
+            }).catch(on: queue, { error in
+                let service = AlphaWalletService.oneInchTokens
+                let url = service.baseURL.appendingPathComponent(service.path)
+                RemoteLogger.instance.logRpcOrOtherWebError("Oneinch error | \(error)", url: url.absoluteString)
+            })
     }
 
     private func defaultOutputAddress(forInput input: AlphaWallet.Address) -> AlphaWallet.Address {

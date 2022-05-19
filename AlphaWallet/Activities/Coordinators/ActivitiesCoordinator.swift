@@ -1,6 +1,7 @@
 // Copyright © 2020 Stormbird PTE. LTD.
 
 import UIKit
+import Combine
 
 protocol ActivitiesCoordinatorDelegate: AnyObject {
     func didPressTransaction(transaction: TransactionInstance, in viewController: ActivitiesViewController)
@@ -10,11 +11,12 @@ protocol ActivitiesCoordinatorDelegate: AnyObject {
 class ActivitiesCoordinator: NSObject, Coordinator {
     private let sessions: ServerDictionary<WalletSession>
     private let activitiesService: ActivitiesServiceType
-    private var subscriptionKey: Subscribable<ActivitiesViewModel>.SubscribableKey!
     private let keystore: Keystore
     private let wallet: Wallet
     private let analyticsCoordinator: AnalyticsCoordinator
+    private let assetDefinitionStore: AssetDefinitionStore
     weak var delegate: ActivitiesCoordinatorDelegate?
+    private var cancelable = Set<AnyCancellable>()
 
     lazy var rootViewController: ActivitiesViewController = {
         makeActivitiesViewController()
@@ -29,8 +31,10 @@ class ActivitiesCoordinator: NSObject, Coordinator {
         navigationController: UINavigationController = .withOverridenBarAppearence(),
         activitiesService: ActivitiesServiceType,
         keystore: Keystore,
-        wallet: Wallet
+        wallet: Wallet,
+        assetDefinitionStore: AssetDefinitionStore
     ) {
+        self.assetDefinitionStore = assetDefinitionStore
         self.analyticsCoordinator = analyticsCoordinator
         self.activitiesService = activitiesService
         self.sessions = sessions
@@ -38,21 +42,16 @@ class ActivitiesCoordinator: NSObject, Coordinator {
         self.keystore = keystore
         self.wallet = wallet
         super.init()
-
-        subscriptionKey = activitiesService.subscribableViewModel.subscribe { [weak self] viewModel in
-            guard let strongSelf = self, let viewModel = viewModel else { return }
-
-            strongSelf.rootViewController.configure(viewModel: viewModel)
-        }
     }
 
     func start() {
         navigationController.viewControllers = [rootViewController]
+        subscribeForActivitiesUpdates()
     }
 
     private func makeActivitiesViewController() -> ActivitiesViewController {
         let viewModel = ActivitiesViewModel()
-        let controller = ActivitiesViewController(analyticsCoordinator: analyticsCoordinator, keystore: keystore, wallet: wallet, viewModel: viewModel, sessions: sessions)
+        let controller = ActivitiesViewController(analyticsCoordinator: analyticsCoordinator, keystore: keystore, wallet: wallet, viewModel: viewModel, sessions: sessions, assetDefinitionStore: assetDefinitionStore)
         controller.delegate = self
         
         return controller
@@ -68,6 +67,15 @@ class ActivitiesCoordinator: NSObject, Coordinator {
 }
 
 extension ActivitiesCoordinator: ActivitiesViewControllerDelegate {
+
+    func subscribeForActivitiesUpdates() {
+        activitiesService.viewModelPublisher
+            .receive(on: RunLoop.main)
+            .sink { [weak rootViewController] viewModel in
+                rootViewController?.configure(viewModel: viewModel)
+            }.store(in: &cancelable)
+    }
+
     func didPressActivity(activity: Activity, in viewController: ActivitiesViewController) {
         delegate?.didPressActivity(activity: activity, in: viewController)
     }

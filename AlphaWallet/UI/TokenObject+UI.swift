@@ -3,6 +3,7 @@
 import UIKit
 import PromiseKit
 import AlphaWalletCore
+import AlphaWalletOpenSea
 
 typealias GoogleContentSize = AlphaWalletCore.GoogleContentSize
 typealias WebImageURL = AlphaWalletCore.WebImageURL
@@ -73,6 +74,8 @@ extension RPCServer {
             return nil
         case .palm, .palmTestnet:
             return R.image.iconsTokensPalm()
+        case .klaytnCypress: return R.image.klaytnIcon()
+        case .klaytnBaobabTestnet: return R.image.klaytnIcon()
         }
     }
 }
@@ -80,7 +83,7 @@ extension RPCServer {
 class RPCServerImageFetcher {
     static var instance = RPCServerImageFetcher()
 
-    private static var subscribables: ThreadSafeDictionary<Int, Subscribable<Image>> = .init()
+    private static var subscribables: AtomicDictionary<Int, Subscribable<Image>> = .init()
 
     private static func programmaticallyGenerateIcon(for server: RPCServer) -> Image {
         return UIView.tokenSymbolBackgroundImage(backgroundColor: server.blockChainNameColor)
@@ -93,7 +96,7 @@ class RPCServerImageFetcher {
             let sub = Subscribable<Image>(nil)
             Self.subscribables[server.chainID] = sub
 
-            if let value = server.staticOverlayIcon {
+            if let value = server.iconImage {
                 sub.value = value
             } else {
                 sub.value = Self.programmaticallyGenerateIcon(for: server)
@@ -113,7 +116,7 @@ extension TokenObject {
 }
 
 extension Activity.AssignedToken {
-    
+
     func icon(withSize size: GoogleContentSize) -> Subscribable<TokenImage> {
         let name = symbol.nilIfEmpty ?? name
         let nftBalance = nftBalanceValue.first
@@ -129,7 +132,7 @@ class TokenImageFetcher {
 
     static var instance = TokenImageFetcher()
 
-    private static var subscribables: ThreadSafeDictionary<String, Subscribable<TokenImage>> = .init()
+    private static var subscribables: AtomicDictionary<String, Subscribable<TokenImage>> = .init()
     private let queue: DispatchQueue = .global()
 
     private static func programmaticallyGenerateIcon(for contractAddress: AlphaWallet.Address, type: TokenType, server: RPCServer, symbol: String) -> TokenImage? {
@@ -288,8 +291,17 @@ class GithubAssetsURLResolver {
     static let file = "logo.png"
 
     enum Source: String {
-        case alphaWallet = "https://raw.githubusercontent.com/alphawallet/iconassets/master/"
+        case alphaWallet = "https://raw.githubusercontent.com/AlphaWallet/iconassets/lowercased/"
         case thirdParty = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/"
+
+        func url(forContract contract: AlphaWallet.Address) -> String {
+            switch self {
+            case .alphaWallet:
+                return rawValue + contract.eip55String.lowercased() + "/" + GithubAssetsURLResolver.file
+            case .thirdParty:
+                return rawValue + contract.eip55String + "/" + GithubAssetsURLResolver.file
+            }
+        }
     }
 
     enum AnyError: Error {
@@ -297,8 +309,7 @@ class GithubAssetsURLResolver {
     }
 
     func resolve(for githubAssetsSource: GithubAssetsURLResolver.Source, contractAddress: AlphaWallet.Address) -> Promise<URLRequest> {
-        let value = githubAssetsSource.rawValue + contractAddress.eip55String + "/" + GithubAssetsURLResolver.file
-
+        let value = githubAssetsSource.url(forContract: contractAddress)
         guard let url = URL(string: value) else {
             verboseLog("Loading token icon URL: \(value) error")
             return .init(error: AnyError.case1)

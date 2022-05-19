@@ -8,13 +8,27 @@ extension WalletSession {
         account: Wallet = .make(),
         server: RPCServer = .main,
         config: Config = .make(),
-        balanceCoordinator: BalanceCoordinatorType = FakeBalanceCoordinator()
+        tokenBalanceService: TokenBalanceService
     ) -> WalletSession {
         return WalletSession(
             account: account,
             server: server,
             config: config,
-            balanceCoordinator: balanceCoordinator
+            tokenBalanceService: tokenBalanceService
+        )
+    }
+
+    static func make(
+        account: Wallet = .make(),
+        server: RPCServer = .main,
+        config: Config = .make()
+    ) -> WalletSession {
+        let tokenBalanceService = FakeSingleChainTokenBalanceService(wallet: account, server: server, etherToken: TokenObject(contract: AlphaWallet.Address.make(), server: server, value: "0", type: .nativeCryptocurrency))
+        return WalletSession(
+            account: account,
+            server: server,
+            config: config,
+            tokenBalanceService: tokenBalanceService
         )
     }
 
@@ -22,50 +36,14 @@ extension WalletSession {
         account: Wallet = .makeStormBird(),
         server: RPCServer,
         config: Config = .make(),
-        balanceCoordinator: BalanceCoordinatorType = FakeBalanceCoordinator()
+        tokenBalanceService: TokenBalanceService
     ) -> WalletSession {
+        let tokenBalanceService = FakeSingleChainTokenBalanceService(wallet: account, server: server, etherToken: TokenObject(contract: AlphaWallet.Address.make(), server: server, value: "0", type: .nativeCryptocurrency))
         return WalletSession(
             account: account,
             server: server,
             config: config,
-            balanceCoordinator: balanceCoordinator
+            tokenBalanceService: tokenBalanceService
         )
-    }
-}
-
-class FakeBalanceCoordinator: BalanceCoordinatorType {
-
-    var balance: Balance? = nil {
-        didSet {
-            update()
-        }
-    }
-
-    var ethBalanceViewModel: BalanceBaseViewModel {
-        NativecryptoBalanceViewModel(server: .main, balance: balance ?? Balance(value: .zero), ticker: nil)
-    }
-    var subscribableEthBalanceViewModel: Subscribable<BalanceBaseViewModel> = .init(nil)
-
-    func refresh() {
-
-    }
-    func refreshEthBalance() {
-
-    }
-
-    // NOTE: only tests purposes
-    func update() {
-        subscribableEthBalanceViewModel.value = ethBalanceViewModel
-    }
-
-    func coinTicker(_ addressAndRPCServer: AddressAndRPCServer) -> CoinTicker? {
-        return nil
-    }
-    func subscribableTokenBalance(_ addressAndRPCServer: AddressAndRPCServer) -> Subscribable<BalanceBaseViewModel> {
-        return .init(nil)
-    }
-
-    static func make() -> FakeBalanceCoordinator {
-        return .init()
     }
 }

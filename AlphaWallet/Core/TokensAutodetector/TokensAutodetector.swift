@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import AlphaWalletCore
 import PromiseKit
 
 extension SingleChainTokensAutodetector {
@@ -17,7 +18,21 @@ extension SingleChainTokensAutodetector {
         ///We re-use the existing balance value to avoid the Wallets tab showing that token (if it already exist) as balance = 0 momentarily
         case fungibleTokenComplete(name: String, symbol: String, decimals: UInt8, contract: AlphaWallet.Address, server: RPCServer, onlyIfThereIsABalance: Bool)
         case none
+
+        var addressAndRPCServer: AddressAndRPCServer? {
+            switch self {
+            case .ercToken(let eRCToken):
+                return .init(address: eRCToken.contract, server: eRCToken.server)
+            case .tokenObject(let tokenObject):
+                return .init(address: tokenObject.contractAddress, server: tokenObject.server)
+            case .delegateContracts, .deletedContracts, .none:
+                return nil
+            case .fungibleTokenComplete(_, _, _, let contract, let server, _):
+                return .init(address: contract, server: server)
+            }
+        }
     }
+
 }
 
 protocol TokensAutodetector: NSObjectProtocol {
@@ -25,14 +40,12 @@ protocol TokensAutodetector: NSObjectProtocol {
 }
 
 class SingleChainTokensAutodetector: NSObject, TokensAutodetector {
-    private let keystore: Keystore
     private let tokensDataStore: TokensDataStore
     private let assetDefinitionStore: AssetDefinitionStore
     private let autoDetectTransactedTokensQueue: OperationQueue
     private let autoDetectTokensQueue: OperationQueue
-    private let server: RPCServer
     private let config: Config
-    private let account: Wallet
+    private let session: WalletSession
     private let queue: DispatchQueue
     private let tokenObjectFetcher: TokenObjectFetcher
 
@@ -40,10 +53,8 @@ class SingleChainTokensAutodetector: NSObject, TokensAutodetector {
     var isAutoDetectingTokens = false
 
     init(
-            account: Wallet,
-            server: RPCServer,
+            session: WalletSession,
             config: Config,
-            keystore: Keystore,
             tokensDataStore: TokensDataStore,
             assetDefinitionStore: AssetDefinitionStore,
             withAutoDetectTransactedTokensQueue autoDetectTransactedTokensQueue: OperationQueue,
@@ -53,10 +64,8 @@ class SingleChainTokensAutodetector: NSObject, TokensAutodetector {
     ) {
         self.tokenObjectFetcher = tokenObjectFetcher
         self.queue = queue
-        self.account = account
-        self.server = server
+        self.session = session
         self.config = config
-        self.keystore = keystore
         self.tokensDataStore = tokensDataStore
         self.assetDefinitionStore = assetDefinitionStore
         self.autoDetectTransactedTokensQueue = autoDetectTransactedTokensQueue
@@ -79,27 +88,20 @@ class SingleChainTokensAutodetector: NSObject, TokensAutodetector {
         guard !isAutoDetectingTransactedTokens else { return }
 
         isAutoDetectingTransactedTokens = true
-        let operation = AutoDetectTransactedTokensOperation(forServer: server, delegate: self, wallet: keystore.currentWallet.address)
+        let operation = AutoDetectTransactedTokensOperation(session: session, tokensDataStore: tokensDataStore, delegate: self)
         autoDetectTransactedTokensQueue.addOperation(operation)
     }
 
-    private func contractsForTransactedTokens(detectedContracts: [AlphaWallet.Address], forServer server: RPCServer) -> Promise<[AlphaWallet.Address]> {
-        return Promise { seal in
-            DispatchQueue.main.async { [weak tokensDataStore] in
-                guard let tokensDataStore = tokensDataStore else { seal.reject(PMKError.cancelled); return }
+    private func contractsForTransactedTokens(detectedContracts: [AlphaWallet.Address], forServer server: RPCServer) -> [AlphaWallet.Address] {
+        let alreadyAddedContracts = tokensDataStore.enabledTokenObjects(forServers: [server]).map { $0.contractAddress }
+        let deletedContracts = tokensDataStore.deletedContracts(forServer: server).map { $0.contractAddress }
+        let hiddenContracts = tokensDataStore.hiddenContracts(forServer: server).map { $0.contractAddress }
+        let delegateContracts = tokensDataStore.delegateContracts(forServer: server).map { $0.contractAddress }
 
-                let alreadyAddedContracts = tokensDataStore.enabledTokenObjects(forServers: [server]).map { $0.contractAddress }
-                let deletedContracts = tokensDataStore.deletedContracts(forServer: server).map { $0.contractAddress }
-                let hiddenContracts = tokensDataStore.hiddenContracts(forServer: server).map { $0.contractAddress }
-                let delegateContracts = tokensDataStore.delegateContracts(forServer: server).map { $0.contractAddress }
-                let contractsToAdd = detectedContracts - alreadyAddedContracts - deletedContracts - hiddenContracts - delegateContracts
-
-                seal.fulfill(contractsToAdd)
-            }
-        }
+        return detectedContracts - alreadyAddedContracts - deletedContracts - hiddenContracts - delegateContracts
     }
 
-    internal func autoDetectTransactedContractsImpl(wallet: AlphaWallet.Address, erc20: Bool) -> Promise<[AlphaWallet.Address]> {
+    internal func autoDetectTransactedContractsImpl(wallet: AlphaWallet.Address, erc20: Bool, server: RPCServer) -> Promise<[AlphaWallet.Address]> {
         let startBlock: Int?
         if erc20 {
             startBlock = Config.getLastFetchedAutoDetectedTransactedTokenErc20BlockNumber(server, wallet: wallet).flatMap { $0 + 1 }
@@ -109,59 +111,50 @@ class SingleChainTokensAutodetector: NSObject, TokensAutodetector {
 
         return firstly {
             GetContractInteractions(queue: queue)
-                .getContractList(address: wallet, server: server, startBlock: startBlock, erc20: erc20)
-        }.then(on: queue) { [weak self] contracts, maxBlockNumber -> Promise<[AlphaWallet.Address]> in
-            guard let strongSelf = self else { return .init(error: PMKError.cancelled) }
-
+                .getContractList(walletAddress: wallet, server: server, startBlock: startBlock, erc20: erc20)
+        }.map(on: queue) { contracts, maxBlockNumber -> [AlphaWallet.Address] in
             if let maxBlockNumber = maxBlockNumber {
                 if erc20 {
-                    Config.setLastFetchedAutoDetectedTransactedTokenErc20BlockNumber(maxBlockNumber, server: strongSelf.server, wallet: wallet)
+                    Config.setLastFetchedAutoDetectedTransactedTokenErc20BlockNumber(maxBlockNumber, server: server, wallet: wallet)
                 } else {
-                    Config.setLastFetchedAutoDetectedTransactedTokenNonErc20BlockNumber(maxBlockNumber, server: strongSelf.server, wallet: wallet)
+                    Config.setLastFetchedAutoDetectedTransactedTokenNonErc20BlockNumber(maxBlockNumber, server: server, wallet: wallet)
                 }
             }
-            //NOTE: Guard safe to protect tokens data store with writing tokens from different user, in case when autodetector stays in memory
-            let currentAddress = strongSelf.keystore.currentWallet.address
-            guard currentAddress.sameContract(as: wallet) else { return .init(error: PMKError.cancelled) }
 
-            return .value(contracts)
+            return contracts
         }
     }
 
     private func autoDetectTransactedTokensImpl(wallet: AlphaWallet.Address, erc20: Bool) -> Promise<[SingleChainTokensAutodetector.AddTokenObjectOperation]> {
-        let server = server
+        let server = session.server
 
         return firstly {
-            autoDetectTransactedContractsImpl(wallet: wallet, erc20: erc20)
-        }.then(on: queue, { [weak self] detectedContracts -> Promise<[AlphaWallet.Address]> in
-            guard let strongSelf = self else { return .init(error: PMKError.cancelled) }
-            return strongSelf.contractsForTransactedTokens(detectedContracts: detectedContracts, forServer: server)
-        }).then(on: queue, { [weak self] contractsToAdd -> Promise<[SingleChainTokensAutodetector.AddTokenObjectOperation]> in
+            autoDetectTransactedContractsImpl(wallet: wallet, erc20: erc20, server: server)
+        }.then(on: queue, { [weak self] detectedContracts -> Promise<[SingleChainTokensAutodetector.AddTokenObjectOperation]> in
             guard let strongSelf = self else { return .init(error: PMKError.cancelled) }
 
-            let promises = contractsToAdd.compactMap { contract -> Promise<AddTokenObjectOperation> in
-                strongSelf.tokenObjectFetcher.fetchTokenObject(for: contract, onlyIfThereIsABalance: false)
-            }
+            let promises = strongSelf.contractsForTransactedTokens(detectedContracts: detectedContracts, forServer: server)
+                .compactMap { contract -> Promise<AddTokenObjectOperation> in
+                    strongSelf.tokenObjectFetcher.fetchTokenObject(for: contract, onlyIfThereIsABalance: false)
+                }
 
-            return when(resolved: promises).map(on: .main, { values -> [SingleChainTokensAutodetector.AddTokenObjectOperation] in
-                let values = values.compactMap { $0.optionalValue }
-                strongSelf.tokensDataStore.addTokenObjects(values: values)
-
-                return values
-            })
+            return when(resolved: promises)
+                .map(on: strongSelf.queue, { values -> [SingleChainTokensAutodetector.AddTokenObjectOperation] in
+                    return values.compactMap { $0.optionalValue }
+                })
         })
     }
 
     private func autoDetectPartnerTokens() {
         guard !config.development.isAutoFetchingDisabled else { return }
-        switch server {
+        switch session.server {
         case .main:
             autoDetectMainnetPartnerTokens()
         case .xDai:
             autoDetectXDaiPartnerTokens()
         case .rinkeby:
             autoDetectRinkebyPartnerTokens()
-        case .kovan, .ropsten, .poa, .sokol, .classic, .callisto, .goerli, .artis_sigma1, .binance_smart_chain, .binance_smart_chain_testnet, .artis_tau1, .custom, .heco_testnet, .heco, .fantom, .fantom_testnet, .avalanche, .avalanche_testnet, .polygon, .mumbai_testnet, .optimistic, .optimisticKovan, .cronosTestnet, .arbitrum, .arbitrumRinkeby, .palm, .palmTestnet:
+        case .kovan, .ropsten, .poa, .sokol, .classic, .callisto, .goerli, .artis_sigma1, .binance_smart_chain, .binance_smart_chain_testnet, .artis_tau1, .custom, .heco_testnet, .heco, .fantom, .fantom_testnet, .avalanche, .avalanche_testnet, .polygon, .mumbai_testnet, .optimistic, .optimisticKovan, .cronosTestnet, .arbitrum, .arbitrumRinkeby, .palm, .palmTestnet, .klaytnCypress, .klaytnBaobabTestnet:
             break
         }
     }
@@ -181,40 +174,33 @@ class SingleChainTokensAutodetector: NSObject, TokensAutodetector {
     private func autoDetectTokens(withContracts contractsToDetect: [(name: String, contract: AlphaWallet.Address)]) {
         guard !isAutoDetectingTokens else { return }
 
-        let address = keystore.currentWallet.address
         isAutoDetectingTokens = true
-        let operation = AutoDetectTokensOperation(forServer: server, delegate: self, wallet: address, tokens: contractsToDetect)
+        let operation = AutoDetectTokensOperation(session: session, tokensDataStore: tokensDataStore, delegate: self, tokens: contractsToDetect)
         autoDetectTokensQueue.addOperation(operation)
     }
 
-    private func contractsToAutodetectTokens(withContracts contractsToDetect: [(name: String, contract: AlphaWallet.Address)], forServer server: RPCServer) -> Promise<[AlphaWallet.Address]> {
-        return Promise { seal in
-            DispatchQueue.main.async { [weak tokensDataStore] in
-                guard let tokensDataStore = tokensDataStore else { return }
+    private func contractsToAutodetectTokens(withContracts contractsToDetect: [(name: String, contract: AlphaWallet.Address)], forServer server: RPCServer) -> [AlphaWallet.Address] {
 
-                let alreadyAddedContracts = tokensDataStore.enabledTokenObjects(forServers: [server]).map { $0.contractAddress }
-                let deletedContracts = tokensDataStore.deletedContracts(forServer: server).map { $0.contractAddress }
-                let hiddenContracts = tokensDataStore.hiddenContracts(forServer: server).map { $0.contractAddress }
+        let alreadyAddedContracts = tokensDataStore.enabledTokenObjects(forServers: [server]).map { $0.contractAddress }
+        let deletedContracts = tokensDataStore.deletedContracts(forServer: server).map { $0.contractAddress }
+        let hiddenContracts = tokensDataStore.hiddenContracts(forServer: server).map { $0.contractAddress }
 
-                seal.fulfill(contractsToDetect.map { $0.contract } - alreadyAddedContracts - deletedContracts - hiddenContracts)
-            }
-        }
+        return contractsToDetect.map { $0.contract } - alreadyAddedContracts - deletedContracts - hiddenContracts
     }
 
     private func fetchCreateErc875OrErc20Token(forContract contract: AlphaWallet.Address, forServer server: RPCServer) -> Promise<AddTokenObjectOperation> {
-        let account = keystore.currentWallet
-        let accountAddress = account.address
+        let accountAddress = session.account.address
         let queue = queue
 
-        return TokenProvider(account: account, server: server)
+        return TokenProvider(account: session.account, server: server)
             .getTokenType(for: contract)
-            .then { [weak tokenObjectFetcher] tokenType -> Promise<AddTokenObjectOperation> in
+            .then(on: queue, { [weak tokenObjectFetcher] tokenType -> Promise<AddTokenObjectOperation> in
                 guard let tokenObjectFetcher = tokenObjectFetcher else { return .init(error: PMKError.cancelled) }
 
                 switch tokenType {
                 case .erc875:
                     //TODO long and very similar code below. Extract function
-                    let balanceCoordinator = GetERC875BalanceCoordinator(forServer: server, queue: queue)
+                    let balanceCoordinator = GetErc875Balance(forServer: server, queue: queue)
                     return balanceCoordinator.getERC875TokenBalance(for: accountAddress, contract: contract).then { balance -> Promise<AddTokenObjectOperation> in
                         if balance.isEmpty {
                             return .value(.none)
@@ -225,7 +211,7 @@ class SingleChainTokensAutodetector: NSObject, TokensAutodetector {
                         return .value(.none)
                     }
                 case .erc20:
-                    let balanceCoordinator = GetERC20BalanceCoordinator(forServer: server, queue: queue)
+                    let balanceCoordinator = GetErc20Balance(forServer: server, queue: queue)
                     return balanceCoordinator.getBalance(for: accountAddress, contract: contract).then { balance -> Promise<AddTokenObjectOperation> in
                         if balance > 0 {
                             return tokenObjectFetcher.fetchTokenObject(for: contract, onlyIfThereIsABalance: false)
@@ -239,48 +225,34 @@ class SingleChainTokensAutodetector: NSObject, TokensAutodetector {
                     //Handled in PrivateBalanceFetcher.refreshBalanceForErc721Or1155Tokens()
                     return .value(.none)
                 }
-            }
+            })
     }
 }
 
 extension SingleChainTokensAutodetector: AutoDetectTransactedTokensOperationDelegate {
 
-    func autoDetectTransactedErc20AndNonErc20Tokens(wallet: AlphaWallet.Address) -> Promise<Void> {
+    func autoDetectTransactedErc20AndNonErc20Tokens(wallet: AlphaWallet.Address) -> Promise<[SingleChainTokensAutodetector.AddTokenObjectOperation]> {
         let fetchErc20Tokens = autoDetectTransactedTokensImpl(wallet: wallet, erc20: true)
         let fetchNonErc20Tokens = autoDetectTransactedTokensImpl(wallet: wallet, erc20: false)
 
         return when(resolved: [fetchErc20Tokens, fetchNonErc20Tokens])
-            .then(on: .main, { [weak tokensDataStore] operations -> Promise<Void> in
-                guard let tokensDataStore = tokensDataStore else { return .init(error: PMKError.cancelled) }
-
-                let values = operations.compactMap { $0.optionalValue }.flatMap { $0 }
-                tokensDataStore.addTokenObjects(values: values)
-
-                return .init()
+            .map(on: queue, { results in
+                return results.compactMap { $0.optionalValue }.flatMap { $0 }
             })
     }
 }
 
 extension SingleChainTokensAutodetector: AutoDetectTokensOperationDelegate {
 
-    func autoDetectTokensImpl(withContracts contractsToDetect: [(name: String, contract: AlphaWallet.Address)], server: RPCServer) -> Promise<Void> {
-        let server = server
-        let queue = queue
+    func autoDetectTokensImpl(withContracts contractsToDetect: [(name: String, contract: AlphaWallet.Address)], server: RPCServer) -> Promise<[SingleChainTokensAutodetector.AddTokenObjectOperation]> {
+        let promises = contractsToAutodetectTokens(withContracts: contractsToDetect, forServer: server)
+            .map { each -> Promise<AddTokenObjectOperation> in
+                return fetchCreateErc875OrErc20Token(forContract: each, forServer: server)
+            }
 
-        return contractsToAutodetectTokens(withContracts: contractsToDetect, forServer: server)
-            .then(on: queue, { contracts -> Promise<[AddTokenObjectOperation]> in
-                let promises = contracts.map { each -> Promise<AddTokenObjectOperation> in
-                    return self.fetchCreateErc875OrErc20Token(forContract: each, forServer: server)
-                }
-
-                return when(resolved: promises).map(on: queue, { results -> [AddTokenObjectOperation] in
-                    return results.compactMap { $0.optionalValue }
-                })
-            }).then(on: .main, { [weak tokensDataStore] values -> Promise<Void> in
-                guard let tokensDataStore = tokensDataStore else { return .init(error: PMKError.cancelled) }
-                tokensDataStore.addTokenObjects(values: values)
-
-                return .init()
-            }).asVoid()
+        return when(resolved: promises)
+            .map(on: queue, { results in
+                return results.compactMap { $0.optionalValue }
+            })
     }
 }

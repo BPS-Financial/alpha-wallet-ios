@@ -9,7 +9,6 @@ struct ConfigureTransactionViewModel {
         case none
     }
 
-    private let ethPrice: Subscribable<Double>
     private let transactionType: TransactionType
     private let configurator: TransactionConfigurator
     private let fullFormatter = EtherNumberFormatter.full
@@ -20,7 +19,7 @@ struct ConfigureTransactionViewModel {
         configurator.session.server
     }
     private var currencyRate: CurrencyRate? {
-        configurator.session.balanceCoordinator.ethBalanceViewModel.currencyRate
+        configurator.session.tokenBalanceService.ethBalanceViewModel?.currencyRate
     }
 
     var recoveryMode: RecoveryMode
@@ -62,7 +61,7 @@ struct ConfigureTransactionViewModel {
 
     var isDataInputHidden: Bool {
         switch transactionType {
-        case .nativeCryptocurrency, .dapp, .tokenScript, .claimPaidErc875MagicLink:
+        case .nativeCryptocurrency, .dapp, .tokenScript, .claimPaidErc875MagicLink, .prebuilt:
             return false
         case .erc20Token, .erc875Token, .erc875TokenOrder, .erc721Token, .erc721ForTicketToken, .erc1155Token:
             return true
@@ -144,8 +143,7 @@ struct ConfigureTransactionViewModel {
         }
     }
 
-    init(configurator: TransactionConfigurator, ethPrice: Subscribable<Double>, recoveryMode: ConfigureTransactionViewModel.RecoveryMode) {
-        self.ethPrice = ethPrice
+    init(configurator: TransactionConfigurator, recoveryMode: ConfigureTransactionViewModel.RecoveryMode) {
         let configurations = configurator.configurations
         self.configurationTypes = ConfigureTransactionViewModel.sortedConfigurationTypes(fromConfigurations: configurations)
         self.configurator = configurator
@@ -158,7 +156,7 @@ struct ConfigureTransactionViewModel {
         case .none:
             selectedConfigurationType = configurator.selectedConfigurationType
         }
-        configurationToEdit = EditedTransactionConfiguration(configuration: configurator.configurations.custom)
+        configurationToEdit = EditedTransactionConfiguration(configuration: configurator.configurations.custom, server: configurator.session.server)
     }
 
     static func sortedConfigurationTypes(fromConfigurations configurations: TransactionConfigurations) -> [TransactionConfigurationType] {
@@ -172,14 +170,16 @@ struct ConfigureTransactionViewModel {
         let isSelected = selectedConfigurationType == configurationType
         let configuration = configurations[configurationType]!
         //TODO if subscribable price are resolved or changes, will be good to refresh, but not essential
-        return .init(configuration: configuration, configurationType: configurationType, cryptoToDollarRate: ethPrice.value, symbol: server.symbol, title: configurationType.title, isSelected: isSelected)
+        let ethPrice = configurator.session.tokenBalanceService.ethBalanceViewModel?.ticker?.price_usd
+        return .init(configuration: configuration, configurationType: configurationType, cryptoToDollarRate: ethPrice, symbol: server.symbol, title: configurationType.title, isSelected: isSelected)
     }
 
     func gasSpeedViewModel(configurationType: TransactionConfigurationType) -> GasSpeedViewModel {
         let isSelected = selectedConfigurationType == configurationType
         let configuration = configurations[configurationType]!
         //TODO if subscribable price are resolved or changes, will be good to refresh, but not essential
-        return .init(configuration: configuration, configurationType: configurationType, cryptoToDollarRate: ethPrice.value, symbol: server.symbol, title: configurationType.title, isSelected: isSelected)
+        let ethPrice = configurator.session.tokenBalanceService.ethBalanceViewModel?.ticker?.price_usd
+        return .init(configuration: configuration, configurationType: configurationType, cryptoToDollarRate: ethPrice, symbol: server.symbol, title: configurationType.title, isSelected: isSelected)
     }
 
     func numberOfRowsInSections(in section: Int) -> Int {

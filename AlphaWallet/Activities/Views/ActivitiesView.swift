@@ -21,10 +21,11 @@ class ActivitiesView: UIView {
     private let keystore: Keystore
     private let wallet: Wallet
     private let analyticsCoordinator: AnalyticsCoordinator
-
+    private let assetDefinitionStore: AssetDefinitionStore
     weak var delegate: ActivitiesViewDelegate?
 
-    init(analyticsCoordinator: AnalyticsCoordinator, keystore: Keystore, wallet: Wallet, viewModel: ActivitiesViewModel, sessions: ServerDictionary<WalletSession>) {
+    init(analyticsCoordinator: AnalyticsCoordinator, keystore: Keystore, wallet: Wallet, viewModel: ActivitiesViewModel, sessions: ServerDictionary<WalletSession>, assetDefinitionStore: AssetDefinitionStore) {
+        self.assetDefinitionStore = assetDefinitionStore
         self.viewModel = viewModel
         self.sessions = sessions
         self.keystore = keystore
@@ -42,7 +43,7 @@ class ActivitiesView: UIView {
         tableView.dataSource = self
         tableView.separatorStyle = .singleLine
         tableView.backgroundColor = viewModel.backgroundColor
-        tableView.estimatedRowHeight = TokensCardViewController.anArbitraryRowHeightSoAutoSizingCellsWorkIniOS10
+        tableView.estimatedRowHeight = Metrics.anArbitraryRowHeightSoAutoSizingCellsWorkIniOS10
 
         addSubview(tableView)
 
@@ -138,7 +139,7 @@ extension ActivitiesView: UITableViewDataSource {
 
         let tokenScriptRendererView: TokenInstanceWebView = {
             //TODO server value doesn't matter since we will change it later. But we should improve this
-            let webView = TokenInstanceWebView(analyticsCoordinator: analyticsCoordinator, server: .main, wallet: wallet, assetDefinitionStore: AssetDefinitionStore.instance, keystore: keystore)
+            let webView = TokenInstanceWebView(analyticsCoordinator: analyticsCoordinator, server: .main, wallet: wallet, assetDefinitionStore: assetDefinitionStore, keystore: keystore)
             //TODO needed? Seems like scary, performance-wise
             //webView.delegate = self
             return webView
@@ -178,7 +179,7 @@ extension ActivitiesView: UITableViewDataSource {
             } else {
                 let cell: TransactionViewCell = tableView.dequeueReusableCell(for: indexPath)
                 let session = sessions[transaction.server]
-                cell.configure(viewModel: .init(transactionRow: .item(transaction: transaction, operation: operation), chainState: session.chainState, currentWallet: session.account, server: transaction.server))
+                cell.configure(viewModel: .init(transactionRow: .item(transaction: transaction, operation: operation), chainState: session.chainState, wallet: session.account, server: transaction.server))
                 return cell
             }
         case .standaloneTransaction(transaction: let transaction, let activity):
@@ -189,7 +190,7 @@ extension ActivitiesView: UITableViewDataSource {
             } else {
                 let cell: TransactionViewCell = tableView.dequeueReusableCell(for: indexPath)
                 let session = sessions[transaction.server]
-                cell.configure(viewModel: .init(transactionRow: .standalone(transaction), chainState: session.chainState, currentWallet: session.account, server: transaction.server))
+                cell.configure(viewModel: .init(transactionRow: .standalone(transaction), chainState: session.chainState, wallet: session.account, server: transaction.server))
                 return cell
             }
         case .standaloneActivity(activity: let activity):

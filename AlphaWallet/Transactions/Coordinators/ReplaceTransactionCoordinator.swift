@@ -20,7 +20,6 @@ class ReplaceTransactionCoordinator: Coordinator {
     private let pendingTransactionInformation: (server: RPCServer, data: Data, transactionType: TransactionType, gasPrice: BigInt)
     private let nonce: BigInt
     private let keystore: Keystore
-    private let ethPrice: Subscribable<Double>
     private let presentingViewController: UIViewController
     private let session: WalletSession
     private let transaction: TransactionInstance
@@ -31,7 +30,7 @@ class ReplaceTransactionCoordinator: Coordinator {
         switch transactionType {
         case .nativeCryptocurrency:
             return AlphaWallet.Address(string: transaction.to)
-        case .dapp, .erc20Token, .erc875Token, .erc875TokenOrder, .erc721Token, .erc721ForTicketToken, .erc1155Token, .tokenScript, .claimPaidErc875MagicLink:
+        case .dapp, .erc20Token, .erc875Token, .erc875TokenOrder, .erc721Token, .erc721ForTicketToken, .erc1155Token, .tokenScript, .claimPaidErc875MagicLink, .prebuilt:
             return nil
         }
     }
@@ -39,7 +38,7 @@ class ReplaceTransactionCoordinator: Coordinator {
         switch transactionType {
         case .nativeCryptocurrency:
             return nil
-        case .dapp, .erc20Token, .erc875Token, .erc875TokenOrder, .erc721Token, .erc721ForTicketToken, .erc1155Token, .tokenScript, .claimPaidErc875MagicLink:
+        case .dapp, .erc20Token, .erc875Token, .erc875TokenOrder, .erc721Token, .erc721ForTicketToken, .erc1155Token, .tokenScript, .claimPaidErc875MagicLink, .prebuilt:
             return AlphaWallet.Address(string: transaction.to)
         }
     }
@@ -49,7 +48,7 @@ class ReplaceTransactionCoordinator: Coordinator {
             return pendingTransactionInformation.transactionType
         case .cancel:
             //Cancel with a 0-value transfer transaction
-            return .nativeCryptocurrency(MultipleChainsTokensDataStore.functional.etherToken(forServer: pendingTransactionInformation.server), destination: .address(keystore.currentWallet.address), amount: nil)
+            return .nativeCryptocurrency(MultipleChainsTokensDataStore.functional.etherToken(forServer: pendingTransactionInformation.server), destination: .address(session.account.address), amount: nil)
         }
     }
     private var transactionValue: BigInt {
@@ -71,21 +70,20 @@ class ReplaceTransactionCoordinator: Coordinator {
     private var transactionConfirmationConfiguration: TransactionConfirmationConfiguration {
         switch mode {
         case .speedup:
-            return .speedupTransaction(keystore: keystore, ethPrice: ethPrice)
+            return .speedupTransaction(keystore: keystore)
         case .cancel:
-            return .cancelTransaction(keystore: keystore, ethPrice: ethPrice)
+            return .cancelTransaction(keystore: keystore)
         }
     }
 
     var coordinators: [Coordinator] = []
     weak var delegate: ReplaceTransactionCoordinatorDelegate?
 
-    init?(analyticsCoordinator: AnalyticsCoordinator, keystore: Keystore, ethPrice: Subscribable<Double>, presentingViewController: UIViewController, session: WalletSession, transaction: TransactionInstance, mode: Mode) {
+    init?(analyticsCoordinator: AnalyticsCoordinator, keystore: Keystore, presentingViewController: UIViewController, session: WalletSession, transaction: TransactionInstance, mode: Mode) {
         guard let pendingTransactionInformation = TransactionDataStore.pendingTransactionsInformation[transaction.id] else { return nil }
         guard let nonce = BigInt(transaction.nonce) else { return nil }
         self.pendingTransactionInformation = pendingTransactionInformation
         self.keystore = keystore
-        self.ethPrice = ethPrice
         self.analyticsCoordinator = analyticsCoordinator
         self.presentingViewController = presentingViewController
         self.session = session
@@ -121,8 +119,9 @@ class ReplaceTransactionCoordinator: Coordinator {
 
 extension ReplaceTransactionCoordinator: TransactionConfirmationCoordinatorDelegate {
     func coordinator(_ coordinator: TransactionConfirmationCoordinator, didFailTransaction error: AnyError) {
-        //TODO improve error message. Several of this delegate func
-        coordinator.navigationController.displayError(message: error.prettyError)
+        UIApplication.shared
+            .presentedViewController(or: presentingViewController)
+            .displayError(message: error.prettyError)
     }
 
     func didSendTransaction(_ transaction: SentTransaction, inCoordinator coordinator: TransactionConfirmationCoordinator) {
@@ -161,7 +160,10 @@ extension ReplaceTransactionCoordinator: TransactionConfirmationCoordinatorDeleg
 }
 
 extension ReplaceTransactionCoordinator: TransactionInProgressCoordinatorDelegate {
-    func transactionInProgressDidDismiss(in coordinator: TransactionInProgressCoordinator) {
+    
+    func didDismiss(in coordinator: TransactionInProgressCoordinator) {
+        removeCoordinator(coordinator)
+
         switch transactionConfirmationResult {
         case .some(let result):
             delegate?.didFinish(result, in: self)

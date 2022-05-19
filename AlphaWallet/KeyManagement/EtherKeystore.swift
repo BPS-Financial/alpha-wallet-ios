@@ -61,7 +61,6 @@ open class EtherKeystore: NSObject, Keystore {
     private let defaultKeychainAccessUserPresenceRequired: KeychainSwiftAccessOptions = .accessibleWhenUnlockedThisDeviceOnly(userPresenceRequired: true)
     private let defaultKeychainAccessUserPresenceNotRequired: KeychainSwiftAccessOptions = .accessibleWhenUnlockedThisDeviceOnly(userPresenceRequired: false)
     private var walletAddressesStore: WalletAddressesStore
-
     private var analyticsCoordinator: AnalyticsCoordinator
 
     private var isSimulator: Bool {
@@ -87,47 +86,43 @@ open class EtherKeystore: NSObject, Keystore {
         walletAddressesStore.wallets
     }
 
-    var subscribableWallets: Subscribable<Set<Wallet>> = .init(nil)
-
     var hasMigratedFromKeystoreFiles: Bool {
         return walletAddressesStore.hasMigratedFromKeystoreFiles
     }
 
     var recentlyUsedWallet: Wallet? {
-        //Use `currentWallet` wherever possible instead of this getter to avoid optionals
         get {
-            guard let address = keychain.get(Keys.recentlyUsedAddress) else {
-                return nil
-            }
-            return wallets.filter { $0.address.sameContract(as: address) }.first
+            return walletAddressesStore.recentlyUsedWallet
         }
         set {
-            keychain.set(newValue?.address.eip55String ?? "", forKey: Keys.recentlyUsedAddress, withAccess: defaultKeychainAccessUserPresenceNotRequired)
+            walletAddressesStore.recentlyUsedWallet = newValue
         }
     }
 
-    var currentWallet: Wallet {
-        //Better crash now instead of populating callers with optionals
+    var currentWallet: Wallet? {
         if let wallet = recentlyUsedWallet {
             return wallet
-        } else if wallets.count == 1 {
-            return wallets.first!
+        } else if let wallet = wallets.first {
+            recentlyUsedWallet = wallet
+            return wallet
         } else {
-            fatalError("No wallet")
+            return nil
         }
     }
 
-    init(keychain: KeychainSwift = KeychainSwift(keyPrefix: Constants.keychainKeyPrefix), userDefaults: UserDefaults = .standardOrForTests, analyticsCoordinator: AnalyticsCoordinator) throws {
+    init(keychain: KeychainSwift = KeychainSwift(keyPrefix: Constants.keychainKeyPrefix), walletAddressesStore: WalletAddressesStore = EtherKeystore.migratedWalletAddressesStore(userDefaults: .standardOrForTests), analyticsCoordinator: AnalyticsCoordinator) throws {
         if !UIApplication.shared.isProtectedDataAvailable {
             throw EtherKeystoreError.protectionDisabled
         }
         self.keychain = keychain
         self.keychain.synchronizable = false
         self.analyticsCoordinator = analyticsCoordinator
-        self.walletAddressesStore = EtherKeystore.migratedWalletAddressesStore(userDefaults: userDefaults)
+        self.walletAddressesStore = walletAddressesStore
         super.init()
 
-        subscribableWallets.value = Set<Wallet>(wallets)
+        if walletAddressesStore.recentlyUsedWallet == nil {
+            self.walletAddressesStore.recentlyUsedWallet = walletAddressesStore.wallets.first
+        }
     }
 
     func createAccount(completion: @escaping (Result<AlphaWallet.Address, KeystoreError>) -> Void) {
@@ -184,7 +179,7 @@ open class EtherKeystore: NSObject, Keystore {
                 let isSuccessful = savePrivateKeyForNonHdWallet(privateKey, forAccount: address, withUserPresence: false)
                 guard isSuccessful else { return .failure(.failedToCreateWallet) }
             }
-            addToListOfEthereumAddressesWithPrivateKeys(address)
+            walletAddressesStore.addToListOfEthereumAddressesWithPrivateKeys(address)
             return .success(Wallet(type: .real(address)))
         case .mnemonic(let mnemonic, _):
             let mnemonicString = mnemonic.joined(separator: " ")
@@ -205,53 +200,16 @@ open class EtherKeystore: NSObject, Keystore {
                 let isSuccessful = saveSeedForHdWallet(seed, forAccount: address, withUserPresence: false)
                 guard isSuccessful else { return .failure(.failedToCreateWallet) }
             }
-            addToListOfEthereumAddressesWithSeed(address)
+            walletAddressesStore.addToListOfEthereumAddressesWithSeed(address)
             return .success(Wallet(type: .real(address)))
         case .watch(let address):
             guard !isAddressAlreadyInWalletsList(address: address) else {
                 return .failure(.duplicateAccount)
             }
-            walletAddressesStore.watchAddresses = [walletAddressesStore.watchAddresses, [address.eip55String]].flatMap {
-                $0
-            }
-
-            notifyWalletUpdated()
+            walletAddressesStore.addToListOfWatchEthereumAddresses(address)
 
             return .success(Wallet(type: .watch(address)))
         }
-    }
-
-    private func notifyWalletUpdated() {
-        // NOTE: application crashes because adding a new wallet performed on background queue, we want to perform it on .main
-        // using .addOperation we want to save operations order, hope it willn't crash. with DispatchQueue.main.async it crashes
-        if Thread.isMainThread {
-            subscribableWallets.value = Set<Wallet>(wallets)
-        } else {
-            OperationQueue.main.addOperation {
-                self.subscribableWallets.value = Set<Wallet>(self.wallets)
-            }
-        }
-    }
-
-    private func addToListOfEthereumAddressesWithPrivateKeys(_ address: AlphaWallet.Address) {
-        let updatedOwnedAddresses = Array(Set(walletAddressesStore.ethereumAddressesWithPrivateKeys + [address.eip55String]))
-        walletAddressesStore.ethereumAddressesWithPrivateKeys = updatedOwnedAddresses
-
-        notifyWalletUpdated()
-    }
-
-    private func addToListOfEthereumAddressesWithSeed(_ address: AlphaWallet.Address) {
-        let updated = Array(Set(walletAddressesStore.ethereumAddressesWithSeed + [address.eip55String]))
-        walletAddressesStore.ethereumAddressesWithSeed = updated
-
-        notifyWalletUpdated()
-    }
-
-    private func addToListOfEthereumAddressesProtectedByUserPresence(_ address: AlphaWallet.Address) {
-        let updated = Array(Set(walletAddressesStore.ethereumAddressesProtectedByUserPresence + [address.eip55String]))
-        walletAddressesStore.ethereumAddressesProtectedByUserPresence = updated
-
-        notifyWalletUpdated()
     }
 
     private func generateMnemonic() -> String {
@@ -388,20 +346,13 @@ open class EtherKeystore: NSObject, Keystore {
     @discardableResult func delete(wallet: Wallet) -> Result<Void, KeystoreError> {
         switch wallet.type {
         case .real(let account):
-            //TODO not the best way to do this but let's see if there's a better way to inform the coordinator that a wallet has been deleted
-            PromptBackupCoordinator(keystore: self, wallet: wallet, config: .init(), analyticsCoordinator: analyticsCoordinator).deleteWallet()
-
-            removeAccountFromBookkeeping(account)
+            removeAccountFromBookkeeping(wallet)
             deleteKeysAndSeedCipherTextFromKeychain(forAccount: account)
             deletePrivateKeysFromSecureEnclave(forAccount: account)
-            //TODO: pass in Config instance instead
-            Config().deleteWalletName(forAccount: account)
-        case .watch(let address):
-            removeAccountFromBookkeeping(address)
-            //TODO: pass in Config instance instead
-            Config().deleteWalletName(forAccount: address)
+        case .watch:
+            removeAccountFromBookkeeping(wallet)
         }
-        (try? LegacyFileBasedKeystore(keystore: self))?.delete(wallet: wallet)
+
         return .success(())
     }
 
@@ -420,9 +371,8 @@ open class EtherKeystore: NSObject, Keystore {
         keychain.delete("\(Keys.ethereumSeedUserPresenceRequiredPrefix)\(account.eip55String)")
     }
 
-    private func removeAccountFromBookkeeping(_ account: AlphaWallet.Address) {
+    private func removeAccountFromBookkeeping(_ account: Wallet) {
         walletAddressesStore.removeAddress(account)
-        notifyWalletUpdated()
     }
 
     func isHdWallet(account: AlphaWallet.Address) -> Bool {
@@ -838,7 +788,7 @@ open class EtherKeystore: NSObject, Keystore {
             }
         }
         if isSuccessful {
-            addToListOfEthereumAddressesProtectedByUserPresence(account)
+            walletAddressesStore.addToListOfEthereumAddressesProtectedByUserPresence(account)
             let secureEnclave = SecureEnclave()
             if isHdWallet(account: account) {
                 secureEnclave.deletePrivateKeys(withName: encryptionKeyForSeedLabel(fromAccount: account, withUserPresence: false))

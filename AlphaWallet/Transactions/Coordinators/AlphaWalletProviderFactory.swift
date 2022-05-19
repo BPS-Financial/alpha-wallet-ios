@@ -4,10 +4,11 @@ import Alamofire
 import Foundation
 import Moya
 import PromiseKit
+import Combine
 
 struct AlphaWalletProviderFactory {
     static let policies: [String: ServerTrustPolicy] = [:]
-    
+
     static func makeProvider() -> MoyaProvider<AlphaWalletService> {
         let manager = Manager(
             configuration: URLSessionConfiguration.default,
@@ -15,7 +16,7 @@ struct AlphaWalletProviderFactory {
         )
         var plugins: [PluginType] = []
 
-        if Features.shouldPrintCURLForOutgoingRequest {
+        if Features.default.isAvailable(.shouldPrintCURLForOutgoingRequest) {
             plugins.append(NetworkLoggerPlugin(cURL: true))
         }
 
@@ -38,41 +39,24 @@ extension MoyaProvider {
     }
 }
 
-func attempt<T>(maximumRetryCount: Int = 3, delayBeforeRetry: DispatchTimeInterval = .seconds(1), delayUpperRangeValueFrom0To: Int = 5, _ body: @escaping () -> Promise<T>) -> Promise<T> {
-    var attempts = 0
-    func attempt() -> Promise<T> {
-        attempts += 1
-        return body().recover { error -> Promise<T> in
-            guard attempts < maximumRetryCount else {
-                throw error
+extension Promise {
+    var publisher: AnyPublisher<T, Error> {
+        var isCanceled: Bool = false
+        let publisher = Deferred {
+            Future<T, Error> { seal in
+                guard !isCanceled else { return }
+
+                self.done { value in
+                    seal(.success((value)))
+                }.catch { error in
+                    seal(.failure(error))
+                }
             }
+        }.handleEvents(receiveCancel: {
+            isCanceled = true
+        })
 
-            if case PMKError.cancelled = error {
-                throw error
-            }
-            return after(delayBeforeRetry.nextRandomInterval(upTo: delayUpperRangeValueFrom0To)).then(on: nil, attempt)
-        }
-    }
-
-    return attempt()
-}
-
-private extension DispatchTimeInterval {
-
-    func nextRandomInterval(upTo value: Int = 5) -> DispatchTimeInterval {
-        let jitter = Int.random(in: 0 ..< value)
-
-        switch self {
-        case .microseconds(let value):
-            return .microseconds(value + jitter)
-        case .milliseconds(let value):
-            return .milliseconds(value + jitter)
-        case .nanoseconds(let value):
-            return .nanoseconds(value + jitter)
-        case .never:
-            return .never
-        case .seconds(let value):
-            return .seconds(value + jitter)
-        }
+        return publisher
+            .eraseToAnyPublisher()
     }
 }

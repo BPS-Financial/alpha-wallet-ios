@@ -48,6 +48,7 @@ class SaveCustomRpcBrowseViewController: UIViewController {
         tableViewController.tableView.backgroundColor = GroupedTable.Color.background
         tableViewController.tableView.tableFooterView = UIView.tableFooterToRemoveEmptyCellSeparators()
         tableViewController.tableView.isEditing = false
+        tableViewController.tableView.register(RPCDisplayTableViewCell.self)
         return tableViewController
     }()
 
@@ -63,8 +64,8 @@ class SaveCustomRpcBrowseViewController: UIViewController {
         return emptyView
     }()
 
-    private lazy var buttonsBar: ButtonsBar = {
-        let buttonsBar = ButtonsBar(configuration: .primary(buttons: 1))
+    private lazy var buttonsBar: HorizontalButtonsBar = {
+        let buttonsBar = HorizontalButtonsBar(configuration: .primary(buttons: 1))
         buttonsBar.translatesAutoresizingMaskIntoConstraints = false
         return buttonsBar
     }()

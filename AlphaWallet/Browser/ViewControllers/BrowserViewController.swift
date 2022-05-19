@@ -17,7 +17,6 @@ protocol BrowserViewControllerDelegate: AnyObject {
 final class BrowserViewController: UIViewController {
     static let locationChangedEventName = "locationChanged"
 
-    private var myContext = 0
     private let account: Wallet
     private let server: RPCServer
 
@@ -147,7 +146,7 @@ final class BrowserViewController: UIViewController {
 
     func goTo(url: URL) {
         hideErrorView()
-        verboseLog("Loading URL: \(url.absoluteString)…")
+        verboseLog("[Browser] Loading URL: \(url.absoluteString)…")
         webView.load(URLRequest(url: url))
     }
 

@@ -5,6 +5,7 @@ import Alamofire
 import BigInt
 import PromiseKit 
 import web3swift
+import Combine
 
 protocol ImportMagicLinkCoordinatorDelegate: class, CanOpenURL {
 	func viewControllerForPresenting(in coordinator: ImportMagicLinkCoordinator) -> UIViewController?
@@ -21,13 +22,13 @@ class ImportMagicLinkCoordinator: Coordinator {
     }
 
     private let analyticsCoordinator: AnalyticsCoordinator
-    private let wallet: Wallet
+    private var wallet: Wallet {
+        sessions.anyValue.account
+    }
     private let config: Config
 	private var importTokenViewController: ImportMagicTokenViewController?
-    private let ethPrice: Subscribable<Double>
-    private let ethBalance: Subscribable<BigInt>
     private var hasCompleted = false
-    private var getERC875TokenBalanceCoordinator: GetERC875BalanceCoordinator?
+    private var getERC875TokenBalanceCoordinator: GetErc875Balance?
     //TODO better to make sure tokenHolder is non-optional. But be careful that ImportMagicTokenViewController also handles when viewModel always has a TokenHolder. Needs good defaults in TokenHolder that can be displayed
     private var tokenHolder: TokenHolder?
     private var count: Decimal?
@@ -56,18 +57,22 @@ class ImportMagicLinkCoordinator: Coordinator {
     var coordinators: [Coordinator] = []
     let server: RPCServer
     weak var delegate: ImportMagicLinkCoordinatorDelegate?
+    private let tokenBalanceService: TokenBalanceService
+    private var cryptoToFiatRateWhenHandlePaidImportCancelable: AnyCancellable?
+    private var cryptoToFiatRateWhenNotEnoughEthForPaidImportCancelable: AnyCancellable?
+    private var balanceWhenHandlePaidImportsCancelable: AnyCancellable?
+    private let sessions: ServerDictionary<WalletSession>
 
-    init(analyticsCoordinator: AnalyticsCoordinator, wallet: Wallet, config: Config, ethPrice: Subscribable<Double>, ethBalance: Subscribable<BigInt>, tokensDatastore: TokensDataStore, assetDefinitionStore: AssetDefinitionStore, url: URL, server: RPCServer, keystore: Keystore) {
+    init(analyticsCoordinator: AnalyticsCoordinator, sessions: ServerDictionary<WalletSession>, config: Config, tokensDatastore: TokensDataStore, assetDefinitionStore: AssetDefinitionStore, url: URL, server: RPCServer, keystore: Keystore) {
         self.analyticsCoordinator = analyticsCoordinator
-        self.wallet = wallet
+        self.sessions = sessions
         self.config = config
-        self.ethPrice = ethPrice
-        self.ethBalance = ethBalance
         self.tokensDataStore = tokensDatastore
         self.assetDefinitionStore = assetDefinitionStore
         self.url = url
         self.server = server
         self.keystore = keystore
+        self.tokenBalanceService = sessions[server].tokenBalanceService
     }
 
     func start(url: URL) -> Bool {
@@ -152,15 +157,22 @@ class ImportMagicLinkCoordinator: Coordinator {
 
         let ethCost = convert(ethCost: signedOrder.order.price)
         promptImportUniversalLink(cost: .paid(eth: ethCost, dollar: nil))
-        ethPrice.subscribe { [weak self] value in
-            guard let celf = self else { return }
-            guard let price = celf.ethPrice.value else { return }
-            let (ethCost, dollarCost) = celf.convert(ethCost: signedOrder.order.price, rate: price)
-            //We should not prompt with an updated price if we are already processing or beyond that. Because this will revert the state back
-            if celf.isNotProcessingYet {
-                celf.promptImportUniversalLink(cost: .paid(eth: ethCost, dollar: dollarCost))
+
+        cryptoToFiatRateWhenHandlePaidImportCancelable?.cancel()
+        cryptoToFiatRateWhenHandlePaidImportCancelable = tokenBalanceService
+            .etherToFiatRatePublisher
+            .compactMap { $0 }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] price in
+                guard let celf = self else { return }
+
+                let (ethCost, dollarCost) = celf.convert(ethCost: signedOrder.order.price, rate: price)
+                //We should not prompt with an updated price if we are already processing or beyond that. Because this will revert the state back
+                if celf.isNotProcessingYet {
+                    celf.promptImportUniversalLink(cost: .paid(eth: ethCost, dollar: dollarCost))
+                }
             }
-        }
+
         return true
     }
 
@@ -257,7 +269,7 @@ class ImportMagicLinkCoordinator: Coordinator {
     }
 
     private func handleNormalLinks(signedOrder: SignedOrder, recoverAddress: AlphaWallet.Address, contractAsAddress: AlphaWallet.Address) {
-        getERC875TokenBalanceCoordinator = GetERC875BalanceCoordinator(forServer: server)
+        getERC875TokenBalanceCoordinator = GetErc875Balance(forServer: server)
         getERC875TokenBalanceCoordinator?.getERC875TokenBalance(for: recoverAddress, contract: contractAsAddress).done({ [weak self] balance in
             guard let strongSelf = self else { return }
             let filteredTokens: [String] = strongSelf.checkERC875TokensAreAvailable(
@@ -387,14 +399,20 @@ class ImportMagicLinkCoordinator: Coordinator {
     }
 
     private func handlePaidImports(signedOrder: SignedOrder) {
-        ethBalance.subscribeOnce { [weak self] value in
-            guard let celf = self else { return }
-            if value > signedOrder.order.price {
-                celf.handlePaidImportsImpl(signedOrder: signedOrder)
-            } else {
-                celf.notEnoughEthForPaidImport(signedOrder: signedOrder)
-            }
-        }
+        balanceWhenHandlePaidImportsCancelable = tokenBalanceService
+            .etherBalance
+            .first()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] viewModel in
+                guard let celf = self, let viewModel = viewModel else { return }
+
+                if viewModel.value > signedOrder.order.price {
+                    celf.handlePaidImportsImpl(signedOrder: signedOrder)
+                } else {
+                    celf.notEnoughEthForPaidImport(signedOrder: signedOrder)
+                }
+                celf.balanceWhenHandlePaidImportsCancelable?.cancel()
+            } 
     }
 
     private func notEnoughEthForPaidImport(signedOrder: SignedOrder) {
@@ -402,23 +420,28 @@ class ImportMagicLinkCoordinator: Coordinator {
         switch server {
         case .xDai:
             errorMessage = R.string.localizable.aClaimTokenFailedNotEnoughXDAITitle()
-        case .classic, .main, .poa, .callisto, .kovan, .ropsten, .rinkeby, .sokol, .goerli, .artis_sigma1, .artis_tau1, .binance_smart_chain, .binance_smart_chain_testnet, .custom, .heco, .heco_testnet, .fantom, .fantom_testnet, .avalanche, .avalanche_testnet, .polygon, .mumbai_testnet, .optimistic, .optimisticKovan, .cronosTestnet, .arbitrum, .arbitrumRinkeby, .palm, .palmTestnet:
+        case .classic, .main, .poa, .callisto, .kovan, .ropsten, .rinkeby, .sokol, .goerli, .artis_sigma1, .artis_tau1, .binance_smart_chain, .binance_smart_chain_testnet, .custom, .heco, .heco_testnet, .fantom, .fantom_testnet, .avalanche, .avalanche_testnet, .polygon, .mumbai_testnet, .optimistic, .optimisticKovan, .cronosTestnet, .arbitrum, .arbitrumRinkeby, .palm, .palmTestnet, .klaytnCypress, .klaytnBaobabTestnet:
             errorMessage = R.string.localizable.aClaimTokenFailedNotEnoughEthTitle()
         }
-        if ethPrice.value == nil {
+
+        if tokenBalanceService.etherToFiatRate == nil {
             let ethCost = convert(ethCost: signedOrder.order.price)
             showImportError(
                 errorMessage: errorMessage,
                 cost: .paid(eth: ethCost, dollar: nil)
             )
         }
-        ethPrice.subscribe { [weak self] value in
-            guard let celf = self else { return }
-            guard let price = celf.ethPrice.value else { return }
-            let (ethCost, dollarCost) = celf.convert(ethCost: signedOrder.order.price, rate: price)
-            celf.showImportError(errorMessage: errorMessage,
-                    cost: .paid(eth: ethCost, dollar: dollarCost))
-        }
+        cryptoToFiatRateWhenNotEnoughEthForPaidImportCancelable?.cancel()
+        cryptoToFiatRateWhenNotEnoughEthForPaidImportCancelable = tokenBalanceService
+            .etherToFiatRatePublisher
+            .compactMap { $0 }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] price in
+                guard let celf = self else { return }
+
+                let (ethCost, dollarCost) = celf.convert(ethCost: signedOrder.order.price, rate: price)
+                celf.showImportError(errorMessage: errorMessage, cost: .paid(eth: ethCost, dollar: dollarCost))
+            }
     }
 
     private func stringEncodeIndices(_ indices: [UInt16]) -> String {
@@ -499,7 +522,7 @@ class ImportMagicLinkCoordinator: Coordinator {
 
 	private func preparingToImportUniversalLink() {
 		guard let viewController = delegate?.viewControllerForPresenting(in: self) else { return }
-        importTokenViewController = ImportMagicTokenViewController(analyticsCoordinator: analyticsCoordinator, server: server, assetDefinitionStore: assetDefinitionStore, keystore: keystore)
+        importTokenViewController = ImportMagicTokenViewController(analyticsCoordinator: analyticsCoordinator, assetDefinitionStore: assetDefinitionStore, keystore: keystore, session: sessions[server])
         guard let vc = importTokenViewController else { return }
         vc.delegate = self
         vc.configure(viewModel: .init(state: .validating, server: server))

@@ -3,6 +3,7 @@
 import Foundation
 import ObjectiveC
 import web3swift
+import Combine
 
 struct Config {
     struct Development {
@@ -177,7 +178,7 @@ struct Config {
 
     var sendAnalyticsEnabled: Bool? {
         get {
-            guard Features.isAnalyticsUIEnabled else { return nil }
+            guard Features.default.isAvailable(.isAnalyticsUIEnabled) else { return nil }
             guard let value = defaults.value(forKey: Keys.sendAnalyticsEnabled) as? Bool else {
                 return nil
             }
@@ -185,7 +186,7 @@ struct Config {
             return value
         }
         set {
-            guard Features.isAnalyticsUIEnabled else {
+            guard Features.default.isAvailable(.isAnalyticsUIEnabled) else {
                 defaults.removeObject(forKey: Keys.sendAnalyticsEnabled)
                 return
             }
@@ -196,7 +197,7 @@ struct Config {
 
     var sendPrivateTransactionsProvider: SendPrivateTransactionsProvider? {
         get {
-            guard Features.isUsingPrivateNetwork else { return nil }
+            guard Features.default.isAvailable(.isUsingPrivateNetwork) else { return nil }
             if defaults.bool(forKey: Keys.usePrivateNetwork) {
                 //Default, for legacy reasons
                 return .ethermine
@@ -206,7 +207,7 @@ struct Config {
             }
         }
         set {
-            guard Features.isUsingPrivateNetwork else { return }
+            guard Features.default.isAvailable(.isUsingPrivateNetwork) else { return }
             defaults.set(newValue?.rawValue, forKey: Keys.privateNetworkProvider)
         }
     }
@@ -237,7 +238,7 @@ struct Config {
             let chainIds = newValue.map { $0.chainID }
             defaults.set(chainIds, forKey: Keys.enabledServers)
 
-            subscribableEnabledServers.value = newValue
+            Self.enabledServersSubject.send(newValue)
         }
     }
 
@@ -259,14 +260,18 @@ struct Config {
         }
     }
 
-    var subscribableEnabledServers: Subscribable<[RPCServer]>
+    var enabledServersPublisher: AnyPublisher<[RPCServer], Never> {
+        Self.enabledServersSubject
+            .filter { !$0.isEmpty }
+            .removeDuplicates()
+            .eraseToAnyPublisher()
+    }
+    //NOTE: keep static while not reduce amount of created instances of `Config`, need to reduce up it to using single instance of Config
+    private static var enabledServersSubject: CurrentValueSubject<[RPCServer], Never> = .init([])
 
     init(defaults: UserDefaults = UserDefaults.standardOrForTests) {
         self.defaults = defaults
-        subscribableEnabledServers = .init(nil)
     }
-
-    let priceInfoEndpoints = URL(string: "https://api.coingecko.com")!
 
     var oldWalletAddressesAlreadyPromptedForBackUp: [String] {
         //We hard code the key here because it's used for migrating off the old value, there should be no reason why this key will change in the next line
@@ -288,10 +293,6 @@ struct Config {
         addresses.append(address.eip55String)
         defaults.setValue(addresses, forKey: Keys.walletAddressesAlreadyPromptedForBackUp)
     }
-
-    let oneInch = URL(string: "https://api.1inch.exchange")!
-    let honeySwapTokens = URL(string: "https://tokens.honeyswap.org/")!
-    let rampAssets = URL(string: "https://api-instant.ramp.network")!
 
     func anyEnabledServer() -> RPCServer {
         let servers = enabledServers
@@ -334,5 +335,44 @@ extension Config {
         var names = walletNames
         names[address] = nil
         setWalletNames(walletNames: names)
+    }
+}
+
+extension Config {
+
+    private static func notificationKey(for transaction: TransactionInstance) -> String {
+        String(format: "%@-%d", transaction.id, transaction.chainId)
+    }
+
+    private static func notificationsStorageKey(wallet: Wallet) -> String {
+        return "presentedNotifications-\(wallet.address.eip55String)"
+    }
+
+    func hasScheduledNotification(for transaction: TransactionInstance, in wallet: Wallet) -> Bool {
+        let key = Config.notificationKey(for: transaction)
+        return notifications(wallet: wallet).contains(key)
+    }
+
+    private func notifications(wallet: Wallet) -> [String] {
+        let storageKey = Config.notificationsStorageKey(wallet: wallet)
+        if let values = defaults.array(forKey: storageKey) {
+            return values as! [String]
+        } else {
+            return []
+        }
+    }
+
+    func markScheduledNotification(transaction: TransactionInstance, in wallet: Wallet) {
+        let key = Config.notificationKey(for: transaction)
+        let notifications = notifications(wallet: wallet)
+        let updatedNotifications = Array(Set(notifications + [key]))
+
+        let storageKey = Config.notificationsStorageKey(wallet: wallet)
+        defaults.set(updatedNotifications, forKey: storageKey)
+    }
+
+    func removeAllNotifications(for wallet: Wallet) {
+        let storageKey = Config.notificationsStorageKey(wallet: wallet)
+        defaults.removeObject(forKey: storageKey)
     }
 }

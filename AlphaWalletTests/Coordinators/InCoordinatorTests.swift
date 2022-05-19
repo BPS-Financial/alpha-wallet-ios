@@ -14,6 +14,12 @@ class FakeUniversalLinkCoordinator: UniversalLinkCoordinatorType {
     }
 }
 
+final class FakeNotificationService: NotificationService {
+    init() {
+        super.init(sources: [], walletBalanceService: FakeMultiWalletBalanceService())
+    }
+}
+
 class InCoordinatorTests: XCTestCase {
 
     func testShowTabBar() {
@@ -22,11 +28,12 @@ class InCoordinatorTests: XCTestCase {
         let navigationController = FakeNavigationController()
         let fas = FakeAnalyticsService()
         let keystore = FakeKeystore(wallets: [wallet])
-        let pbc = PromptBackupCoordinator(keystore: keystore, wallet: wallet, config: .make(), analyticsCoordinator: fas)
-        let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, promptBackupCoordinator: pbc, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets),
-        walletBalanceCoordinator: FakeWalletBalanceCoordinator())
-        let coordinator = InCoordinator(
+        let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets),
+        walletBalanceService: FakeMultiWalletBalanceService())
+        let coordinator = ActiveWalletCoordinator(
             navigationController: navigationController,
+            walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test),
+            localStore: FakeRealmLocalStore(),
             wallet: .make(),
             keystore: keystore,
             assetDefinitionStore: AssetDefinitionStore(),
@@ -34,12 +41,12 @@ class InCoordinatorTests: XCTestCase {
             analyticsCoordinator: FakeAnalyticsService(),
             restartQueue: .init(),
             universalLinkCoordinator: FakeUniversalLinkCoordinator.make(),
-            promptBackupCoordinator: pbc,
             accountsCoordinator: ac,
-            walletBalanceCoordinator: FakeWalletBalanceCoordinator(),
+            walletBalanceService: FakeMultiWalletBalanceService(),
             coinTickersFetcher: FakeCoinTickersFetcher(),
             tokenActionsService: FakeSwapTokenService(),
-            walletConnectCoordinator: .fake()
+            walletConnectCoordinator: .fake(),
+            notificationService: FakeNotificationService()
         )
 
         coordinator.start(animated: false)
@@ -69,32 +76,53 @@ class InCoordinatorTests: XCTestCase {
 
         let navigationController = FakeNavigationController()
         let fas = FakeAnalyticsService()
-        let pbc = PromptBackupCoordinator(keystore: keystore, wallet: account1, config: .make(), analyticsCoordinator: fas)
-        let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, promptBackupCoordinator: pbc, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets),
-        walletBalanceCoordinator: FakeWalletBalanceCoordinator())
-        let coordinator = InCoordinator(
+        let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets),
+        walletBalanceService: FakeMultiWalletBalanceService())
+        let c1 = ActiveWalletCoordinator(
             navigationController: FakeNavigationController(),
-            wallet: .make(),
+            walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test),
+            localStore: FakeRealmLocalStore(),
+            wallet: account1,
             keystore: keystore,
             assetDefinitionStore: AssetDefinitionStore(),
             config: .make(),
             analyticsCoordinator: FakeAnalyticsService(),
             restartQueue: .init(),
             universalLinkCoordinator: FakeUniversalLinkCoordinator.make(),
-            promptBackupCoordinator: pbc,
             accountsCoordinator: ac,
-            walletBalanceCoordinator: FakeWalletBalanceCoordinator(),
+            walletBalanceService: FakeMultiWalletBalanceService(),
             coinTickersFetcher: FakeCoinTickersFetcher(),
             tokenActionsService: FakeSwapTokenService(),
-            walletConnectCoordinator: .fake())
+            walletConnectCoordinator: .fake(),
+            notificationService: FakeNotificationService()
+        )
 
-        coordinator.showTabBar(for: account1, animated: false)
+        c1.start(animated: false)
 
-        XCTAssertEqual(coordinator.keystore.currentWallet, account1)
+        XCTAssertEqual(c1.keystore.currentWallet, account1)
 
-        coordinator.showTabBar(for: account2, animated: false)
+        let c2 = ActiveWalletCoordinator(
+            navigationController: FakeNavigationController(),
+            walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test),
+            localStore: FakeRealmLocalStore(),
+            wallet: account2,
+            keystore: keystore,
+            assetDefinitionStore: AssetDefinitionStore(),
+            config: .make(),
+            analyticsCoordinator: FakeAnalyticsService(),
+            restartQueue: .init(),
+            universalLinkCoordinator: FakeUniversalLinkCoordinator.make(),
+            accountsCoordinator: ac,
+            walletBalanceService: FakeMultiWalletBalanceService(),
+            coinTickersFetcher: FakeCoinTickersFetcher(),
+            tokenActionsService: FakeSwapTokenService(),
+            walletConnectCoordinator: .fake(),
+            notificationService: FakeNotificationService()
+        )
 
-        XCTAssertEqual(coordinator.keystore.currentWallet, account2)
+        c1.start(animated: false)
+
+        XCTAssertEqual(c2.keystore.currentWallet, account2)
     }
 
     func testShowSendFlow() {
@@ -102,11 +130,12 @@ class InCoordinatorTests: XCTestCase {
         let navigationController = FakeNavigationController()
         let fas = FakeAnalyticsService()
         let keystore = FakeKeystore()
-        let pbc = PromptBackupCoordinator(keystore: keystore, wallet: wallet, config: .make(), analyticsCoordinator: fas)
-        let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, promptBackupCoordinator: pbc, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets),
-        walletBalanceCoordinator: FakeWalletBalanceCoordinator())
-        let coordinator = InCoordinator(
+        let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets),
+        walletBalanceService: FakeMultiWalletBalanceService())
+        let coordinator = ActiveWalletCoordinator(
                 navigationController: FakeNavigationController(),
+                walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test),
+                localStore: FakeRealmLocalStore(),
                 wallet: wallet,
                 keystore: FakeKeystore(wallets: [wallet]),
                 assetDefinitionStore: AssetDefinitionStore(),
@@ -114,14 +143,14 @@ class InCoordinatorTests: XCTestCase {
                 analyticsCoordinator: FakeAnalyticsService(),
                 restartQueue: .init(),
                 universalLinkCoordinator: FakeUniversalLinkCoordinator.make(),
-                promptBackupCoordinator: pbc,
                 accountsCoordinator: ac,
-                walletBalanceCoordinator: FakeWalletBalanceCoordinator(),
+                walletBalanceService: FakeMultiWalletBalanceService(),
                 coinTickersFetcher: FakeCoinTickersFetcher(),
                 tokenActionsService: FakeSwapTokenService(),
-                walletConnectCoordinator: .fake()
+                walletConnectCoordinator: .fake(),
+                notificationService: FakeNotificationService()
         )
-        coordinator.showTabBar(for: .make(), animated: false)
+        coordinator.start(animated: false)
         coordinator.showPaymentFlow(for: .send(type: .transaction(TransactionType.nativeCryptocurrency(TokenObject(), destination: .none, amount: nil))), server: .main, navigationController: coordinator.navigationController)
 
         XCTAssertTrue(coordinator.coordinators.last is PaymentCoordinator)
@@ -133,11 +162,12 @@ class InCoordinatorTests: XCTestCase {
         let navigationController = FakeNavigationController()
         let fas = FakeAnalyticsService()
         let keystore = FakeKeystore()
-        let pbc = PromptBackupCoordinator(keystore: keystore, wallet: wallet, config: .make(), analyticsCoordinator: fas)
-        let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, promptBackupCoordinator: pbc, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets),
-        walletBalanceCoordinator: FakeWalletBalanceCoordinator())
-        let coordinator = InCoordinator(
+        let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets),
+        walletBalanceService: FakeMultiWalletBalanceService())
+        let coordinator = ActiveWalletCoordinator(
             navigationController: navigationController,
+            walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test),
+            localStore: FakeRealmLocalStore(),
             wallet: wallet,
             keystore: FakeKeystore(wallets: [wallet]),
             assetDefinitionStore: AssetDefinitionStore(),
@@ -145,15 +175,14 @@ class InCoordinatorTests: XCTestCase {
             analyticsCoordinator: FakeAnalyticsService(),
             restartQueue: .init(),
             universalLinkCoordinator: FakeUniversalLinkCoordinator.make(),
-            promptBackupCoordinator: pbc,
             accountsCoordinator: ac,
-            walletBalanceCoordinator: FakeWalletBalanceCoordinator(),
+            walletBalanceService: FakeMultiWalletBalanceService(),
             coinTickersFetcher: FakeCoinTickersFetcher(),
             tokenActionsService: FakeSwapTokenService(),
-            walletConnectCoordinator: .fake()
+            walletConnectCoordinator: .fake(),
+            notificationService: FakeNotificationService()
         )
-        coordinator.showTabBar(for: .make(), animated: false)
-
+        coordinator.start(animated: false)
         coordinator.showPaymentFlow(for: .request, server: .main, navigationController: coordinator.navigationController)
 
         XCTAssertTrue(coordinator.coordinators.last is PaymentCoordinator)
@@ -164,12 +193,13 @@ class InCoordinatorTests: XCTestCase {
         let navigationController = FakeNavigationController()
         let fas = FakeAnalyticsService()
         let keystore = FakeKeystore()
-        let pbc = PromptBackupCoordinator(keystore: keystore, wallet: .make(), config: .make(), analyticsCoordinator: fas)
-        let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, promptBackupCoordinator: pbc, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets),
-        walletBalanceCoordinator: FakeWalletBalanceCoordinator())
+        let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets),
+        walletBalanceService: FakeMultiWalletBalanceService())
 
-        let coordinator = InCoordinator(
+        let coordinator = ActiveWalletCoordinator(
             navigationController: navigationController,
+            walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test),
+            localStore: FakeRealmLocalStore(),
             wallet: .make(),
             keystore: FakeKeystore(),
             assetDefinitionStore: AssetDefinitionStore(),
@@ -177,14 +207,14 @@ class InCoordinatorTests: XCTestCase {
             analyticsCoordinator: FakeAnalyticsService(),
             restartQueue: .init(),
             universalLinkCoordinator: FakeUniversalLinkCoordinator.make(),
-            promptBackupCoordinator: pbc,
             accountsCoordinator: ac,
-            walletBalanceCoordinator: FakeWalletBalanceCoordinator(),
+            walletBalanceService: FakeMultiWalletBalanceService(),
             coinTickersFetcher: FakeCoinTickersFetcher(),
             tokenActionsService: FakeSwapTokenService(),
-            walletConnectCoordinator: .fake()
+            walletConnectCoordinator: .fake(),
+            notificationService: FakeNotificationService()
         )
-        coordinator.showTabBar(for: .make(), animated: false)
+        coordinator.start(animated: false)
 
         let viewController = (coordinator.tabBarController.selectedViewController as? UINavigationController)?.viewControllers[0]
 
@@ -193,7 +223,7 @@ class InCoordinatorTests: XCTestCase {
 
 	//Commented out because the tokens tab has been moved to be under the More tab and will be moved
 //    func testShowTabTokens() {
-//        let coordinator = InCoordinator(
+//        let coordinator = ActiveWalletCoordinator(
 //            navigationController: FakeNavigationController(),
 //            wallet: .make(),
 //            keystore: FakeEtherKeystore(),
@@ -216,10 +246,11 @@ class InCoordinatorTests: XCTestCase {
             keystore.recentlyUsedWallet = wallet
             let navigationController = FakeNavigationController()
             let fas = FakeAnalyticsService()
-            let pbc = PromptBackupCoordinator(keystore: keystore, wallet: wallet, config: .make(), analyticsCoordinator: fas)
-            let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, promptBackupCoordinator: pbc, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets), walletBalanceCoordinator: FakeWalletBalanceCoordinator())
-            let coordinator = InCoordinator(
+            let ac = AccountsCoordinator(config: .make(), navigationController: navigationController, keystore: keystore, analyticsCoordinator: fas, viewModel: .init(configuration: .changeWallets), walletBalanceService: FakeMultiWalletBalanceService())
+            let coordinator = ActiveWalletCoordinator(
                     navigationController: navigationController,
+                    walletAddressesStore: EtherKeystore.migratedWalletAddressesStore(userDefaults: .test),
+                    localStore: FakeRealmLocalStore(),
                     wallet: wallet,
                     keystore: keystore,
                     assetDefinitionStore: AssetDefinitionStore(),
@@ -227,14 +258,14 @@ class InCoordinatorTests: XCTestCase {
                     analyticsCoordinator: FakeAnalyticsService(),
                     restartQueue: .init(),
                     universalLinkCoordinator: FakeUniversalLinkCoordinator.make(),
-                    promptBackupCoordinator: pbc,
                     accountsCoordinator: ac,
-                    walletBalanceCoordinator: FakeWalletBalanceCoordinator(),
+                    walletBalanceService: FakeMultiWalletBalanceService(),
                     coinTickersFetcher: FakeCoinTickersFetcher(),
                     tokenActionsService: FakeSwapTokenService(),
-                    walletConnectCoordinator: .fake()
+                    walletConnectCoordinator: .fake(),
+                    notificationService: FakeNotificationService()
             )
-            coordinator.showTabBar(for: wallet, animated: false)
+            coordinator.start(animated: false) 
 
             coordinator.showTab(.tokens)
 
@@ -248,14 +279,18 @@ class InCoordinatorTests: XCTestCase {
 }
 
 import PromiseKit
+import Combine
 
 final class FakeCoinTickersFetcher: CoinTickersFetcherType {
-    
-    func fetchPrices(forTokens tokens: [TokenMappedToTicker]) -> Promise<Void> {
-        return .value(())
+
+    func fetchPrices(forTokens tokens: [TokenMappedToTicker]) {
+        
     }
 
-    var tickersSubscribable: Subscribable<[AddressAndRPCServer: CoinTicker]> = .init(nil)
+    var tickersUpdatedPublisher: AnyPublisher<Void, Never> {
+        Just(())
+            .eraseToAnyPublisher()
+    }
 
     func fetchChartHistories(addressToRPCServerKey: AddressAndRPCServer) -> Promise<[ChartHistory]> {
         return .value([])

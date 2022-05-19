@@ -7,7 +7,7 @@
 
 import UIKit
 
-@objc protocol KeyboardNavigationDelegateProtocol {
+@objc protocol KeyboardNavigationDelegate {
     func gotoNextResponder()
     func gotoPrevResponder()
     func addHttpsText()
@@ -15,7 +15,7 @@ import UIKit
 
 class SaveCustomRpcManualEntryView: UIView {
 
-    private let buttonsBar = ButtonsBar(configuration: .primary(buttons: 1))
+    private let buttonsBar = HorizontalButtonsBar(configuration: .primary(buttons: 1))
     private var scrollViewBottomConstraint: NSLayoutConstraint!
     private let roundedBackground = RoundedBackground()
     private let scrollView = UIScrollView()
@@ -199,7 +199,7 @@ class SaveCustomRpcManualEntryView: UIView {
 
 }
 
-extension SaveCustomRpcManualEntryView: KeyboardNavigationDelegateProtocol {
+extension SaveCustomRpcManualEntryView: KeyboardNavigationDelegate {
 
     func gotoNextResponder() {
         nextTextField()?.becomeFirstResponder()
@@ -210,7 +210,9 @@ extension SaveCustomRpcManualEntryView: KeyboardNavigationDelegateProtocol {
     }
 
     func addHttpsText() {
+        // swiftlint:disable empty_enum_arguments
         guard let currentTextField = currentTextField(), let inputString = currentTextField.textField.text, !inputString.lowercased().starts(with: "https://") else { return }
+        // swiftlint:enable empty_enum_arguments
         currentTextField.textField.text = "https://" + inputString
     }
 
@@ -230,7 +232,7 @@ fileprivate func defaultTextField(_ type: UIKeyboardType, placeHolder: String, l
     return textField
 }
 
-fileprivate func navToolbar(for delegate: KeyboardNavigationDelegateProtocol) -> UIToolbar {
+fileprivate func navToolbar(for delegate: KeyboardNavigationDelegate) -> UIToolbar {
     let toolbar = UIToolbar(frame: .zero)
     let prev = UIBarButtonItem(title: "<", style: .plain, target: delegate, action: #selector(delegate.gotoPrevResponder))
     let next = UIBarButtonItem(title: ">", style: .plain, target: delegate, action: #selector(delegate.gotoNextResponder))
@@ -240,7 +242,7 @@ fileprivate func navToolbar(for delegate: KeyboardNavigationDelegateProtocol) ->
     return toolbar
 }
 
-fileprivate func urlToolbar(for delegate: KeyboardNavigationDelegateProtocol) -> UIToolbar {
+fileprivate func urlToolbar(for delegate: KeyboardNavigationDelegate) -> UIToolbar {
     let toolbar = UIToolbar(frame: .zero)
     let prev = UIBarButtonItem(title: "<", style: .plain, target: delegate, action: #selector(delegate.gotoPrevResponder))
     let next = UIBarButtonItem(title: ">", style: .plain, target: delegate, action: #selector(delegate.gotoNextResponder))

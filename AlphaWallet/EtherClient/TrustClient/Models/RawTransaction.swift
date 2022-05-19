@@ -53,7 +53,7 @@ struct RawTransaction: Decodable {
 }
 
 extension TransactionInstance {
-    static func from(transaction: RawTransaction, tokensDataStore: TokensDataStore, tokenProvider: TokenProviderType, server: RPCServer) -> Promise<TransactionInstance?> {
+    static func from(transaction: RawTransaction, tokensDataStore: TokensDataStore, session: WalletSession) -> Promise<TransactionInstance?> {
         guard let from = AlphaWallet.Address(string: transaction.from) else {
             return Promise.value(nil)
         }
@@ -68,11 +68,11 @@ extension TransactionInstance {
         let to = AlphaWallet.Address(string: transaction.to)?.eip55String ?? transaction.to
 
         return firstly {
-            createOperationForTokenTransfer(forTransaction: transaction, tokensDataStore: tokensDataStore, tokenProvider: tokenProvider, server: server)
-        }.then { operations -> Promise<TransactionInstance?> in
+            createOperationForTokenTransfer(forTransaction: transaction, tokensDataStore: tokensDataStore, session: session)
+        }.then(on: session.queue, { operations -> Promise<TransactionInstance?> in
             let result = TransactionInstance(
                     id: transaction.hash,
-                    server: server,
+                    server: session.server,
                     blockNumber: Int(transaction.blockNumber)!,
                     transactionIndex: Int(transaction.transactionIndex)!,
                     from: from.description,
@@ -89,37 +89,35 @@ extension TransactionInstance {
             )
 
             return .value(result)
-        }
+        })
     }
 
-    static private func createOperationForTokenTransfer(forTransaction transaction: RawTransaction, tokensDataStore: TokensDataStore, tokenProvider: TokenProviderType, server: RPCServer) -> Promise<[LocalizedOperationObjectInstance]> {
+    static private func createOperationForTokenTransfer(forTransaction transaction: RawTransaction, tokensDataStore: TokensDataStore, session: WalletSession) -> Promise<[LocalizedOperationObjectInstance]> {
         guard let contract = transaction.toAddress else {
             return Promise.value([])
         }
 
         func generateLocalizedOperation(value: BigUInt, contract: AlphaWallet.Address, to recipient: AlphaWallet.Address, functionCall: DecodedFunctionCall, server: RPCServer) -> Promise<[LocalizedOperationObjectInstance]> {
-            tokensDataStore.tokenObjectPromise(forContract: contract, server: server).then { token -> Promise<[LocalizedOperationObjectInstance]> in
-                if let token = token {
-                    let operationType = mapTokenTypeToTransferOperationType(token.type, functionCall: functionCall)
-                    let result = LocalizedOperationObjectInstance(from: transaction.from, to: recipient.eip55String, contract: contract, type: operationType.rawValue, value: String(value), tokenId: "", symbol: token.symbol, name: token.name, decimals: token.decimals)
-                    return .value([result])
-                } else {
-                    let getContractName = tokenProvider.getContractName(for: contract)
-                    let getContractSymbol = tokenProvider.getContractSymbol(for: contract)
-                    let getDecimals = tokenProvider.getDecimals(for: contract)
-                    let getTokenType = tokenProvider.getTokenType(for: contract)
+            if let token = tokensDataStore.token(forContract: contract, server: server) {
+                let operationType = mapTokenTypeToTransferOperationType(token.type, functionCall: functionCall)
+                let result = LocalizedOperationObjectInstance(from: transaction.from, to: recipient.eip55String, contract: contract, type: operationType.rawValue, value: String(value), tokenId: "", symbol: token.symbol, name: token.name, decimals: token.decimals)
+                return .value([result])
+            } else {
+                let getContractName = session.tokenProvider.getContractName(for: contract)
+                let getContractSymbol = session.tokenProvider.getContractSymbol(for: contract)
+                let getDecimals = session.tokenProvider.getDecimals(for: contract)
+                let getTokenType = session.tokenProvider.getTokenType(for: contract)
 
-                    return firstly {
-                        when(fulfilled: getContractName, getContractSymbol, getDecimals, getTokenType)
-                    }.then { name, symbol, decimals, tokenType -> Promise<[LocalizedOperationObjectInstance]> in
-                        let operationType = mapTokenTypeToTransferOperationType(tokenType, functionCall: functionCall)
-                        let result = LocalizedOperationObjectInstance(from: transaction.from, to: recipient.eip55String, contract: contract, type: operationType.rawValue, value: String(value), tokenId: "", symbol: symbol, name: name, decimals: Int(decimals))
-                        return .value([result])
-                    }.recover { _ -> Promise<[LocalizedOperationObjectInstance]> in
-                        //NOTE: Return an empty array when failure to fetch contracts data, instead of failing whole TransactionInstance creating
-                        return Promise.value([])
-                    }
-                }
+                return firstly {
+                    when(fulfilled: getContractName, getContractSymbol, getDecimals, getTokenType)
+                }.then(on: session.queue, { name, symbol, decimals, tokenType -> Promise<[LocalizedOperationObjectInstance]> in
+                    let operationType = mapTokenTypeToTransferOperationType(tokenType, functionCall: functionCall)
+                    let result = LocalizedOperationObjectInstance(from: transaction.from, to: recipient.eip55String, contract: contract, type: operationType.rawValue, value: String(value), tokenId: "", symbol: symbol, name: name, decimals: Int(decimals))
+                    return .value([result])
+                }).recover(on: session.queue, { _ -> Promise<[LocalizedOperationObjectInstance]> in
+                    //NOTE: Return an empty array when failure to fetch contracts data, instead of failing whole TransactionInstance creating
+                    return Promise.value([])
+                })
             }
         }
 
@@ -127,9 +125,9 @@ extension TransactionInstance {
         if let functionCall = DecodedFunctionCall(data: data) {
             switch functionCall.type {
             case .erc20Transfer(let recipient, let value):
-                return generateLocalizedOperation(value: value, contract: contract, to: recipient, functionCall: functionCall, server: server)
+                return generateLocalizedOperation(value: value, contract: contract, to: recipient, functionCall: functionCall, server: session.server)
             case .erc20Approve(let spender, let value):
-                return generateLocalizedOperation(value: value, contract: contract, to: spender, functionCall: functionCall, server: server)
+                return generateLocalizedOperation(value: value, contract: contract, to: spender, functionCall: functionCall, server: session.server)
             case .nativeCryptoTransfer, .others:
                 break
             case .erc1155SafeTransfer, .erc1155SafeBatchTransfer:

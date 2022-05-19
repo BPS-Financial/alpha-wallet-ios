@@ -12,8 +12,8 @@ import Combine
 
 protocol ActivitiesServiceType: class {
     var sessions: ServerDictionary<WalletSession> { get }
-    var subscribableViewModel: Subscribable<ActivitiesViewModel> { get }
-    var subscribableUpdatedActivity: Subscribable<Activity> { get }
+    var viewModelPublisher: AnyPublisher<ActivitiesViewModel, Never> { get }
+    var didUpdateActivityPublisher: AnyPublisher<Activity, Never> { get }
 
     func stop()
     func reinject(activity: Activity)
@@ -22,6 +22,10 @@ protocol ActivitiesServiceType: class {
 
 // swiftlint:disable type_body_length
 class ActivitiesService: NSObject, ActivitiesServiceType {
+    private typealias ContractsAndCards = [(tokenContract: AlphaWallet.Address, server: RPCServer, card: TokenScriptCard, interpolatedFilter: String)]
+    private typealias ActivityTokenObjectTokenHolder = (activity: Activity, tokenObject: Activity.AssignedToken, tokenHolder: TokenHolder)
+    private typealias TokenObjectsAndXMLHandlers = [(contract: AlphaWallet.Address, server: RPCServer, xmlHandler: XMLHandler)]
+
     private let config: Config
     let sessions: ServerDictionary<WalletSession>
     private let tokensDataStore: TokensDataStore
@@ -33,34 +37,31 @@ class ActivitiesService: NSObject, ActivitiesServiceType {
     private var activitiesIndexLookup: [Int: (index: Int, activity: Activity)] = .init()
     private var activities: [Activity] = .init()
 
-    private var tokensAndTokenHolders: [AlphaWallet.Address: (tokenObject: Activity.AssignedToken, tokenHolders: [TokenHolder])] = .init()
+    private var tokensAndTokenHolders: AtomicDictionary<AlphaWallet.Address, (tokenObject: Activity.AssignedToken, tokenHolders: [TokenHolder])> = .init()
     private var rateLimitedViewControllerReloader: RateLimiter?
     private var hasLoadedActivitiesTheFirstTime = false
-    private var fetchTransactionsCancelable: AnyCancellable?
 
-    let subscribableUpdatedActivity: Subscribable<Activity> = .init(nil)
-    let subscribableViewModel: Subscribable<ActivitiesViewModel> = .init(.init(activities: []))
+    private let didUpdateActivitySubject: PassthroughSubject<Activity, Never> = .init()
+    private let viewModelSubject: CurrentValueSubject<ActivitiesViewModel, Never> = .init(.init(activities: []))
 
     private var wallet: Wallet {
         sessions.anyValue.account
     }
 
-    private let queue: DispatchQueue
-
+    private let queue: DispatchQueue = DispatchQueue(label: "com.Background.updateQueue", qos: .userInitiated)
     private let activitiesFilterStrategy: ActivitiesFilterStrategy
-    private var filteredTransactionsSubscriptionKey: Subscribable<[TransactionInstance]>.SubscribableKey!
     private let transactionDataStore: TransactionDataStore
     private let transactionsFilterStrategy: TransactionsFilterStrategy
-
-    private typealias ContractsAndCards = [(tokenContract: AlphaWallet.Address, server: RPCServer, card: TokenScriptCard, interpolatedFilter: String)]
-    private typealias ActivityTokenObjectTokenHolder = (activity: Activity, tokenObject: Activity.AssignedToken, tokenHolder: TokenHolder)
-    private typealias TokenObjectsAndXMLHandlers = [(contract: AlphaWallet.Address, server: RPCServer, xmlHandler: XMLHandler)]
-
-    private var contractsAndCardsPromise: Promise<ActivitiesService.ContractsAndCards>?
-    //Cache tokens lookup for performance
-    private var tokensCache: ThreadSafeDictionary<AlphaWallet.Address, Activity.AssignedToken> = .init()
-    private let activitiesThreadSafeQueue = DispatchQueue(label: "ActivitiesSynchronizedAccessQueue", qos: .background)
     private var cancelable = Set<AnyCancellable>()
+    private let threadSafe = ThreadSafe(label: "org.alphawallet.swift.activities")
+
+    var viewModelPublisher: AnyPublisher<ActivitiesViewModel, Never> {
+        viewModelSubject.eraseToAnyPublisher()
+    }
+
+    var didUpdateActivityPublisher: AnyPublisher<Activity, Never> {
+        didUpdateActivitySubject.eraseToAnyPublisher()
+    }
 
     init(
         config: Config,
@@ -71,10 +72,8 @@ class ActivitiesService: NSObject, ActivitiesServiceType {
         transactionDataStore: TransactionDataStore,
         activitiesFilterStrategy: ActivitiesFilterStrategy = .none,
         transactionsFilterStrategy: TransactionsFilterStrategy = .all,
-        queue: DispatchQueue,
         tokensDataStore: TokensDataStore
     ) {
-        self.queue = queue
         self.config = config
         self.sessions = sessions
         self.assetDefinitionStore = assetDefinitionStore
@@ -86,23 +85,25 @@ class ActivitiesService: NSObject, ActivitiesServiceType {
         self.tokensDataStore = tokensDataStore
         super.init()
 
-        transactionDataStore
+        let transactionsChangesetPublisher = transactionDataStore
             .transactionsChangesetPublisher(forFilter: transactionsFilterStrategy, servers: config.enabledServers)
-            .receive(on: queue)
-            .sink { [weak self] _ in
-                self?.reloadImpl(reloadImmediately: true)
-            }.store(in: &cancelable)
+            .map { _ in }
+            .eraseToAnyPublisher()
 
-        eventsActivityDataStore
+        let eventsActivityPublisher = eventsActivityDataStore
             .recentEventsPublisher
+            .map { _ in }
+            .eraseToAnyPublisher()
+
+        Publishers.Merge(transactionsChangesetPublisher, eventsActivityPublisher)
             .receive(on: queue)
             .sink { [weak self]  _ in
-                self?.reloadImpl(reloadImmediately: true)
+                self?.createActivities(reloadImmediately: true)
             }.store(in: &cancelable)
     }
 
     func copy(activitiesFilterStrategy: ActivitiesFilterStrategy, transactionsFilterStrategy: TransactionsFilterStrategy) -> ActivitiesServiceType {
-        return ActivitiesService(config: config, sessions: sessions, assetDefinitionStore: assetDefinitionStore, eventsActivityDataStore: eventsActivityDataStore, eventsDataStore: eventsDataStore, transactionDataStore: transactionDataStore, activitiesFilterStrategy: activitiesFilterStrategy, transactionsFilterStrategy: transactionsFilterStrategy, queue: queue, tokensDataStore: tokensDataStore)
+        return ActivitiesService(config: config, sessions: sessions, assetDefinitionStore: assetDefinitionStore, eventsActivityDataStore: eventsActivityDataStore, eventsDataStore: eventsDataStore, transactionDataStore: transactionDataStore, activitiesFilterStrategy: activitiesFilterStrategy, transactionsFilterStrategy: transactionsFilterStrategy, tokensDataStore: tokensDataStore)
     }
 
     func stop() {
@@ -112,103 +113,93 @@ class ActivitiesService: NSObject, ActivitiesServiceType {
         }
     }
 
-    //NOTE: it seems like most of operation in reloadImpl(reloadImmediately could be cached
-    private func reloadImpl(reloadImmediately: Bool) {
-        if let promise = contractsAndCardsPromise, promise.isPending {
-            return
+    private func getTokensAndXmlHandlers(forTokens tokens: [TokenObject]) -> TokenObjectsAndXMLHandlers {
+        return tokens.compactMap { each in
+            let xmlHandler = XMLHandler(token: each, assetDefinitionStore: self.assetDefinitionStore)
+            guard xmlHandler.hasAssetDefinition else { return nil }
+            guard xmlHandler.server?.matches(server: each.server) ?? false else { return nil }
+
+            return (contract: each.contractAddress, server: each.server, xmlHandler: xmlHandler)
         }
-        let enabledServers = self.config.enabledServers
-        let promise = firstly {
-            Promise<[TokenObject]> { seal in
-                DispatchQueue.main.async {
-                    switch self.transactionsFilterStrategy {
-                    case .all:
-                        let tokenObjects = self.tokensDataStore.enabledTokenObjects(forServers: self.config.enabledServers)
-                        seal.fulfill(tokenObjects)
-                    case .filter(_, let tokenObject):
-                        seal.fulfill([tokenObject])
-                    }
-                }
-            }
-        }.map(on: .main, { tokensInDatabase -> TokenObjectsAndXMLHandlers in
-            return tokensInDatabase.compactMap { each in
-                let eachContract = each.contractAddress
-                let eachServer = each.server
-                let xmlHandler = XMLHandler(token: each, assetDefinitionStore: self.assetDefinitionStore)
-                guard xmlHandler.hasAssetDefinition else { return nil }
-                guard xmlHandler.server?.matches(server: eachServer) ?? false else { return nil }
-
-                return (contract: eachContract, server: eachServer, xmlHandler: xmlHandler)
-            }
-        }).map(on: queue, { contractServerXmlHandlers -> ContractsAndCards in
-            let contractsAndCardsOptional: [ContractsAndCards] = contractServerXmlHandlers.compactMap { eachContract, _, xmlHandler in
-                var contractAndCard: ContractsAndCards = .init()
-                for card in xmlHandler.activityCards {
-                    let (filterName, filterValue) = card.eventOrigin.eventFilter
-                    let interpolatedFilter: String
-                    if let implicitAttribute = EventSourceCoordinator.functional.convertToImplicitAttribute(string: filterValue) {
-                        switch implicitAttribute {
-                        case .tokenId:
-                            continue
-                        case .ownerAddress:
-                            interpolatedFilter = "\(filterName)=\(self.wallet.address.eip55String)"
-                        case .label, .contractAddress, .symbol:
-                            //TODO support more?
-                            continue
-                        }
-                    } else {
-                        //TODO support things like "$prefix-{tokenId}"
-                        continue
-                    }
-
-                    guard let server = xmlHandler.server else { continue }
-                    switch server {
-                    case .any:
-                        for each in enabledServers {
-                            contractAndCard.append((tokenContract: eachContract, server: each, card: card, interpolatedFilter: interpolatedFilter))
-                        }
-                    case .server(let server):
-                        contractAndCard.append((tokenContract: eachContract, server: server, card: card, interpolatedFilter: interpolatedFilter))
-                    }
-                }
-                return contractAndCard
-            }
-            return contractsAndCardsOptional.flatMap { $0 }
-        })
-
-        contractsAndCardsPromise = promise
-
-        promise.done(on: .main, { [weak self] contractsAndCards in
-            guard let strongSelf = self else { return }
-
-            strongSelf.fetchAndRefreshActivities(contractsAndCards: contractsAndCards, reloadImmediately: reloadImmediately)
-        }).cauterize()
     }
 
-    private func fetchAndRefreshActivities(contractsAndCards: ContractsAndCards, reloadImmediately: Bool) {
-        Promise<[ActivityTokenObjectTokenHolder]> { seal in
-            var activitiesAndTokens: [ActivityTokenObjectTokenHolder] = .init()
-            //NOTE: here is a lot of calculations, `contractsAndCards` could reach up of 1000 items, as well as recentEvents could reach 1000.Simply it call inner function 1 000 000 times
-            for (eachContract, eachServer, card, interpolatedFilter) in contractsAndCards {
-                let activities = getActivities(forTokenContract: eachContract, server: eachServer, card: card, interpolatedFilter: interpolatedFilter)
-                activitiesAndTokens.append(contentsOf: activities)
+    private func getContractsAndCards(contractServerXmlHandlers: ActivitiesService.TokenObjectsAndXMLHandlers) -> ContractsAndCards {
+        let contractsAndCardsOptional: [ContractsAndCards] = contractServerXmlHandlers.compactMap { eachContract, _, xmlHandler in
+            var contractAndCard: ContractsAndCards = .init()
+            for card in xmlHandler.activityCards {
+                let (filterName, filterValue) = card.eventOrigin.eventFilter
+                let interpolatedFilter: String
+                if let implicitAttribute = EventSourceCoordinator.functional.convertToImplicitAttribute(string: filterValue) {
+                    switch implicitAttribute {
+                    case .tokenId:
+                        continue
+                    case .ownerAddress:
+                        interpolatedFilter = "\(filterName)=\(self.wallet.address.eip55String)"
+                    case .label, .contractAddress, .symbol:
+                        //TODO support more?
+                        continue
+                    }
+                } else {
+                    //TODO support things like "$prefix-{tokenId}"
+                    continue
+                }
+
+                guard let server = xmlHandler.server else { continue }
+                switch server {
+                case .any:
+                    for each in config.enabledServers {
+                        contractAndCard.append((tokenContract: eachContract, server: each, card: card, interpolatedFilter: interpolatedFilter))
+                    }
+                case .server(let server):
+                    contractAndCard.append((tokenContract: eachContract, server: server, card: card, interpolatedFilter: interpolatedFilter))
+                }
             }
-            seal.fulfill(activitiesAndTokens)
-        }.done(on: queue, { [weak self] activitiesAndTokens in
-            guard let strongSelf = self else { return }
+            return contractAndCard
+        }
+        return contractsAndCardsOptional.flatMap { $0 }
+    }
 
-            let activitiesAndTokens = Self.filter(activities: activitiesAndTokens, strategy: strongSelf.activitiesFilterStrategy)
+    private func getTokensForActivities() -> [TokenObject] {
+        switch transactionsFilterStrategy {
+        case .all:
+            return tokensDataStore.enabledTokenObjects(forServers: config.enabledServers)
+        case .filter(_, let token):
+            return [token]
+        case .predicate:
+            //NOTE: not supported here
+            return []
+        }
+    }
 
-            strongSelf.activities = activitiesAndTokens.compactMap { $0.activity }
-            strongSelf.activities.sort { $0.blockNumber > $1.blockNumber }
-            strongSelf.updateActivitiesIndexLookup()
+    private func createActivities(reloadImmediately: Bool) {
+        let tokens = getTokensForActivities()
+        let tokensAndXmlHandlers = getTokensAndXmlHandlers(forTokens: tokens)
+        let contractsAndCards = getContractsAndCards(contractServerXmlHandlers: tokensAndXmlHandlers)
+        let activitiesAndTokens = getActivitiesAndTokens(contractsAndCards: contractsAndCards)
 
-            strongSelf.reloadViewController(reloadImmediately: reloadImmediately)
+        threadSafe.performSync { [weak self] in
+            self?.activities = activitiesAndTokens.compactMap { $0.activity }
+            self?.activities.sort { $0.blockNumber > $1.blockNumber }
 
-            for (activity, tokenObject, tokenHolder) in activitiesAndTokens {
-                strongSelf.refreshActivity(tokenObject: tokenObject, tokenHolder: tokenHolder, activity: activity)
-            }
-        }).cauterize()
+            self?.updateActivitiesIndexLookup()
+        }
+
+        reloadViewController(reloadImmediately: reloadImmediately)
+
+        for (activity, tokenObject, tokenHolder) in activitiesAndTokens {
+            refreshActivity(tokenObject: tokenObject, tokenHolder: tokenHolder, activity: activity)
+        }
+    }
+
+    private func getActivitiesAndTokens(contractsAndCards: ContractsAndCards) -> [ActivitiesService.ActivityTokenObjectTokenHolder] {
+        var activitiesAndTokens: [ActivityTokenObjectTokenHolder] = .init()
+        //NOTE: here is a lot of calculations, `contractsAndCards` could reach up of 1000 items, as well as recentEvents could reach 1000.Simply it call inner function 1 000 000 times
+        for (eachContract, eachServer, card, interpolatedFilter) in contractsAndCards {
+            let activities = getActivities(forTokenContract: eachContract, server: eachServer, card: card, interpolatedFilter: interpolatedFilter)
+            activitiesAndTokens.append(contentsOf: activities)
+        }
+
+        return Self.filter(activities: activitiesAndTokens, strategy: activitiesFilterStrategy)
     }
 
     private static func filter(activities filteredActivitiesForThisCard: [ActivitiesService.ActivityTokenObjectTokenHolder], strategy: ActivitiesFilterStrategy) -> [ActivitiesService.ActivityTokenObjectTokenHolder] {
@@ -233,13 +224,8 @@ class ActivitiesService: NSObject, ActivitiesServiceType {
 
         let activitiesForThisCard: [ActivityTokenObjectTokenHolder] = events.compactMap { eachEvent in
             let token: Activity.AssignedToken
-            if let t = tokensCache[contract] {
-                token = t
-            } else {
-                guard let t = tokensDataStore.token(forContract: contract, server: server) else { return nil }
-                token = Activity.AssignedToken(tokenObject: t)
-                tokensCache[contract] = token
-            }
+            guard let t = tokensDataStore.token(forContract: contract, server: server) else { return nil }
+            token = Activity.AssignedToken(tokenObject: t)
 
             let implicitAttributes = generateImplicitAttributesForToken(forContract: contract, server: server, symbol: token.symbol)
             let tokenAttributes = implicitAttributes
@@ -255,6 +241,7 @@ class ActivitiesService: NSObject, ActivitiesServiceType {
 
             let tokenObject: Activity.AssignedToken
             let tokenHolders: [TokenHolder]
+
             if let (o, h) = tokensAndTokenHolders[contract] {
                 tokenObject = o
                 tokenHolders = h
@@ -266,8 +253,7 @@ class ActivitiesService: NSObject, ActivitiesServiceType {
                     tokenHolders = [TokenHolder(tokens: [token], contractAddress: tokenObject.contractAddress, hasAssetDefinition: true)]
                 } else {
                     guard let t = tokensDataStore.token(forContract: contract, server: server) else { return nil }
-
-                    tokenHolders = TokenAdaptor(token: t, assetDefinitionStore: assetDefinitionStore, eventsDataStore: eventsDataStore).getTokenHolders(forWallet: wallet)
+                    tokenHolders = t.getTokenHolders(assetDefinitionStore: assetDefinitionStore, eventsDataStore: eventsDataStore, forWallet: wallet)
                 }
                 tokensAndTokenHolders[contract] = (tokenObject: tokenObject, tokenHolders: tokenHolders)
             }
@@ -315,50 +301,29 @@ class ActivitiesService: NSObject, ActivitiesServiceType {
     }
 
     private func reloadViewControllerImpl() {
-        Promise<[TransactionInstance]> { seal in
-            if !activities.isEmpty {
-                hasLoadedActivitiesTheFirstTime = true
-            }
+        if !activities.isEmpty {
+            hasLoadedActivitiesTheFirstTime = true
+        }
 
-            DispatchQueue.main.async {
-                self.fetchTransactionsCancelable?.cancel()
-                self.fetchTransactionsCancelable = self.transactionDataStore
-                    .transactionsPublisher(forFilter: self.transactionsFilterStrategy, servers: self.config.enabledServers, oldestBlockNumber: self.activities.last?.blockNumber)
-                    .replaceError(with: [])
-                    .map { result -> [TransactionInstance] in
-                        return result.map { TransactionInstance(transaction: $0) }
-                    }
-                    .receive(on: self.queue)
-                    .sink { transactions in
-                        seal.fulfill(transactions)
-                    }
-            }
-        }.then(on: queue, { [weak self] transactions -> Promise<[ActivityRowModel]> in
-            guard let strongSelf = self else { return .init(error: PMKError.cancelled) }
+        let transactions = transactionDataStore
+            .transactions(forFilter: transactionsFilterStrategy, servers: config.enabledServers, oldestBlockNumber: activities.last?.blockNumber)
+            .map { TransactionInstance(transaction: $0) }
 
-            return strongSelf.combine(activities: strongSelf.activities, withTransactions: transactions)
-        }).map(on: queue, { items in
-            return ActivitiesViewModel.sorted(activities: items)
-        }).done(on: .main, { [weak self] activities in
-            self?.subscribableViewModel.value = .init(activities: activities)
-        }).cauterize()
+        let items = combine(activities: activities, withTransactions: transactions)
+        let activities = ActivitiesViewModel.sorted(activities: items)
+
+        viewModelSubject.send(.init(activities: activities))
     }
 
     //Combining includes filtering around activities (from events) for ERC20 send/receive transactions which are already covered by transactions
-    private func combine(activities: [Activity], withTransactions transactionInstances: [TransactionInstance]) -> Promise<[ActivityRowModel]> {
-        return Promise<[Int: [ActivityOrTransactionInstance]]> { seal in
-            let all: [ActivityOrTransactionInstance] = activities.map { .activity($0) } + transactionInstances.map { .transaction($0) }
-            let sortedAll: [ActivityOrTransactionInstance] = all.sorted { $0.blockNumber < $1.blockNumber }
-            let counters = Dictionary(grouping: sortedAll, by: \.blockNumber)
+    private func combine(activities: [Activity], withTransactions transactionInstances: [TransactionInstance]) -> [ActivityRowModel] {
+        let all: [ActivityOrTransactionInstance] = activities.map { .activity($0) } + transactionInstances.map { .transaction($0) }
+        let sortedAll: [ActivityOrTransactionInstance] = all.sorted { $0.blockNumber < $1.blockNumber }
+        let counters = Dictionary(grouping: sortedAll, by: \.blockNumber)
 
-            seal.fulfill(counters)
-        }.map(on: .main, { [weak self] counters -> [ActivityRowModel] in
-            guard let strongSelf = self else { throw PMKError.cancelled }
-
-            return counters.map {
-                strongSelf.generateRowModels(fromActivityOrTransactions: $0.value, withBlockNumber: $0.key)
-            }.flatMap { $0 }
-        })
+        return counters.map {
+            generateRowModels(fromActivityOrTransactions: $0.value, withBlockNumber: $0.key)
+        }.flatMap { $0 }
     }
 
     private func generateRowModels(fromActivityOrTransactions activityOrTransactions: [ActivityOrTransactionInstance], withBlockNumber blockNumber: Int) -> [ActivityRowModel] {
@@ -437,24 +402,27 @@ class ActivitiesService: NSObject, ActivitiesServiceType {
     private func refreshActivity(tokenObject: Activity.AssignedToken, tokenHolder: TokenHolder, activity: Activity, isFirstUpdate: Bool = true) {
         let attributeValues = AssetAttributeValues(attributeValues: tokenHolder.values)
         let resolvedAttributeNameValues = attributeValues.resolve { [weak self, weak tokenHolder] _ in
-            guard let strongSelf = self, let tokenHolder = tokenHolder, isFirstUpdate else { return }
-            strongSelf.refreshActivity(tokenObject: tokenObject, tokenHolder: tokenHolder, activity: activity, isFirstUpdate: false)
+            guard let tokenHolder = tokenHolder, isFirstUpdate else { return }
+            self?.refreshActivity(tokenObject: tokenObject, tokenHolder: tokenHolder, activity: activity, isFirstUpdate: false)
         }
 
-        //NOTE: Fix crush when element with index out of range
-        if let (index, oldActivity) = activitiesIndexLookup[activity.id], activities.indices.contains(index) {
-            let updatedValues = (token: oldActivity.values.token.merging(resolvedAttributeNameValues) { _, new in new }, card: oldActivity.values.card)
-            let updatedActivity: Activity = .init(id: oldActivity.id, rowType: oldActivity.rowType, tokenObject: tokenObject, server: oldActivity.server, name: oldActivity.name, eventName: oldActivity.eventName, blockNumber: oldActivity.blockNumber, transactionId: oldActivity.transactionId, transactionIndex: oldActivity.transactionIndex, logIndex: oldActivity.logIndex, date: oldActivity.date, values: updatedValues, view: oldActivity.view, itemView: oldActivity.itemView, isBaseCard: oldActivity.isBaseCard, state: oldActivity.state)
+        threadSafe.performSync { [weak self] in
+            guard let strongSelf = self else { return }
 
-            //Ugly, but should be safe
-            executeThreadSafe({ [unowned self] in
-                self.activities[index] = updatedActivity
-                self.reloadViewController(reloadImmediately: false)
+            //NOTE: Fix crush when element with index out of range
+            if let (index, oldActivity) = activitiesIndexLookup[activity.id], activities.indices.contains(index) {
+                let updatedValues = (token: oldActivity.values.token.merging(resolvedAttributeNameValues) { _, new in new }, card: oldActivity.values.card)
+                let updatedActivity: Activity = .init(id: oldActivity.id, rowType: oldActivity.rowType, tokenObject: tokenObject, server: oldActivity.server, name: oldActivity.name, eventName: oldActivity.eventName, blockNumber: oldActivity.blockNumber, transactionId: oldActivity.transactionId, transactionIndex: oldActivity.transactionIndex, logIndex: oldActivity.logIndex, date: oldActivity.date, values: updatedValues, view: oldActivity.view, itemView: oldActivity.itemView, isBaseCard: oldActivity.isBaseCard, state: oldActivity.state)
 
-                self.subscribableUpdatedActivity.value = updatedActivity
-            }, queue: activitiesThreadSafeQueue)
-        } else {
-            //no-op. We should be able to find it unless the list of activities has changed
+                if strongSelf.activities.indices.contains(index) {
+                    strongSelf.activities[index] = updatedActivity
+                    strongSelf.reloadViewController(reloadImmediately: false)
+
+                    strongSelf.didUpdateActivitySubject.send(updatedActivity)
+                }
+            } else {
+                //no-op. We should be able to find it unless the list of activities has changed
+            }
         }
     }
 
@@ -465,7 +433,8 @@ class ActivitiesService: NSObject, ActivitiesServiceType {
             guard each.shouldInclude(forAddress: contract, isFungible: true) else { continue }
             switch each {
             case .ownerAddress:
-                results[each.javaScriptName] = .address(sessions[server].account.address)
+                guard let session = sessions[safe: server] else { continue }
+                results[each.javaScriptName] = .address(session.account.address)
             case .tokenId:
                 //We aren't going to add `tokenId` as an implicit attribute even for ERC721s, because we don't know it
                 break
@@ -544,16 +513,5 @@ extension ActivitiesService.functional {
         timestamp.date = event.date
         results["timestamp"] = .generalisedTime(timestamp)
         return results
-    }
-}
-
-func executeThreadSafe(_ closure: () -> Void, queue: DispatchQueue) {
-    if Thread.isMainThread {
-        closure()
-    } else {
-        dispatchPrecondition(condition: .notOnQueue(queue))
-        queue.sync {
-            closure()
-        }
     }
 }

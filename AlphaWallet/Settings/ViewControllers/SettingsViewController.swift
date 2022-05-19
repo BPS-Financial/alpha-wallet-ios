@@ -31,7 +31,7 @@ class SettingsViewController: UIViewController {
         tableView.translatesAutoresizingMaskIntoConstraints = false
         tableView.dataSource = self
         tableView.delegate = self
-        tableView.estimatedRowHeight = TokensCardViewController.anArbitraryRowHeightSoAutoSizingCellsWorkIniOS10
+        tableView.estimatedRowHeight = Metrics.anArbitraryRowHeightSoAutoSizingCellsWorkIniOS10
         tableView.tableFooterView = UIView.tableFooterToRemoveEmptyCellSeparators()
 
         return tableView
@@ -137,7 +137,7 @@ class SettingsViewController: UIViewController {
         )
 
         firstly {
-            GetWalletNameCoordinator(config: config).getName(forAddress: account.address)
+            GetWalletName(config: config).getName(forAddress: account.address)
         }.done { [weak self] name in
             //NOTE check if still correct cell, since this is async
             guard let strongSelf = self, cell.indexPath == indexPath else { return }

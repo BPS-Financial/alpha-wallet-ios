@@ -176,7 +176,7 @@ enum Metrics {
     }
 
     static let tokenChainOverlayDimension = CGFloat(16)
-    
+    static let anArbitraryRowHeightSoAutoSizingCellsWorkIniOS10 = CGFloat(100)
     enum Analytics {
         static let spacing = CGFloat(30)
         static let edgeInsets = UIEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
@@ -468,5 +468,8 @@ enum Style {
     enum value {
         static let appreciated: UIColor = R.color.green()!
         static let depreciated: UIColor = R.color.danger()!
+    }
+    enum insets {
+        static let safeBottom: CGFloat = 2.0
     }
 }

@@ -14,8 +14,6 @@ protocol AnalyticsServiceType: AnalyticsCoordinator {
     func application(open url: URL, sourceApplication: String?, annotation: Any)
     func application(open url: URL, options: [UIApplication.OpenURLOptionsKey: Any])
     func application(didReceiveRemoteNotification userInfo: [AnyHashable: Any])
-
-    func add(pushDeviceToken token: Data)
 }
 
 class AnalyticsService: NSObject, AnalyticsServiceType {
@@ -27,15 +25,11 @@ class AnalyticsService: NSObject, AnalyticsServiceType {
         super.init()
         //NOTE: set default state of sending analytics events
         if self.config.sendAnalyticsEnabled == nil {
-            self.config.sendAnalyticsEnabled = Features.isAnalyticsUIEnabled
+            self.config.sendAnalyticsEnabled = Features.default.isAvailable(.isAnalyticsUIEnabled)
         }
         if Constants.Credentials.analyticsKey.nonEmpty && !Environment.isTestFlight {
             mixpanelService = MixpanelCoordinator(withKey: Constants.Credentials.analyticsKey)
         }
-    }
-
-    func add(pushDeviceToken token: Data) {
-        mixpanelService?.add(pushDeviceToken: token)
     }
 
     func applicationDidBecomeActive() {
@@ -66,6 +60,11 @@ class AnalyticsService: NSObject, AnalyticsServiceType {
     func log(action: AnalyticsAction, properties: [String: AnalyticsEventPropertyValue]?) {
         guard config.isSendAnalyticsEnabled else { return }
         mixpanelService?.log(action: action, properties: properties)
+    }
+
+    func log(stat: AnalyticsStat, properties: [String: AnalyticsEventPropertyValue]?) {
+        guard config.isSendAnalyticsEnabled else { return }
+        mixpanelService?.log(stat: stat, properties: properties)
     }
 
     func log(error: AnalyticsError, properties: [String: AnalyticsEventPropertyValue]?) {

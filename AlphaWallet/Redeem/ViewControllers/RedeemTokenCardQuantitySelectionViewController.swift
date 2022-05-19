@@ -21,7 +21,7 @@ class RedeemTokenCardQuantitySelectionViewController: UIViewController, TokenVer
 	private let subtitleLabel = UILabel()
     private let quantityStepper = NumberStepper()
     private let tokenRowView: TokenRowView & UIView
-    private let buttonsBar = ButtonsBar(configuration: .primary(buttons: 1))
+    private let buttonsBar = HorizontalButtonsBar(configuration: .primary(buttons: 1))
     private var viewModel: RedeemTokenCardQuantitySelectionViewModel
 
     var contract: AlphaWallet.Address {
@@ -33,7 +33,14 @@ class RedeemTokenCardQuantitySelectionViewController: UIViewController, TokenVer
     let assetDefinitionStore: AssetDefinitionStore
     weak var delegate: RedeemTokenCardQuantitySelectionViewControllerDelegate?
 
-    init(analyticsCoordinator: AnalyticsCoordinator, token: TokenObject, viewModel: RedeemTokenCardQuantitySelectionViewModel, assetDefinitionStore: AssetDefinitionStore, keystore: Keystore) {
+    init(
+        analyticsCoordinator: AnalyticsCoordinator,
+        token: TokenObject,
+        viewModel: RedeemTokenCardQuantitySelectionViewModel,
+        assetDefinitionStore: AssetDefinitionStore,
+        keystore: Keystore,
+        session: WalletSession
+    ) {
         self.analyticsCoordinator = analyticsCoordinator
         self.token = token
         self.viewModel = viewModel
@@ -44,7 +51,7 @@ class RedeemTokenCardQuantitySelectionViewController: UIViewController, TokenVer
         case .backedByOpenSea:
             tokenRowView = OpenSeaNonFungibleTokenCardRowView(tokenView: .viewIconified)
         case .notBackedByOpenSea:
-            tokenRowView = TokenCardRowView(analyticsCoordinator: analyticsCoordinator, server: token.server, tokenView: .viewIconified, assetDefinitionStore: assetDefinitionStore, keystore: keystore, wallet: keystore.currentWallet)
+            tokenRowView = TokenCardRowView(analyticsCoordinator: analyticsCoordinator, server: token.server, tokenView: .viewIconified, assetDefinitionStore: assetDefinitionStore, keystore: keystore, wallet: session.account)
         }
 
         super.init(nibName: nil, bundle: nil)
@@ -97,11 +104,11 @@ class RedeemTokenCardQuantitySelectionViewController: UIViewController, TokenVer
             buttonsBar.leadingAnchor.constraint(equalTo: footerBar.leadingAnchor),
             buttonsBar.trailingAnchor.constraint(equalTo: footerBar.trailingAnchor),
             buttonsBar.topAnchor.constraint(equalTo: footerBar.topAnchor),
-            buttonsBar.heightAnchor.constraint(equalToConstant: ButtonsBar.buttonsHeight),
+            buttonsBar.heightAnchor.constraint(equalToConstant: HorizontalButtonsBar.buttonsHeight),
 
             footerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            footerBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -ButtonsBar.buttonsHeight - ButtonsBar.marginAtBottomScreen),
+            footerBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -HorizontalButtonsBar.buttonsHeight - HorizontalButtonsBar.marginAtBottomScreen),
             footerBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ] + roundedBackground.createConstraintsWithContainer(view: view))
     }

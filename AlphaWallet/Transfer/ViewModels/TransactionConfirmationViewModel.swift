@@ -3,6 +3,10 @@
 import Foundation
 import BigInt
 
+protocol CryptoToFiatRateUpdatable: class {
+    var cryptoToDollarRate: Double? { get set }
+}
+
 enum TransactionConfirmationViewModel {
     case dappOrWalletConnectTransaction(DappOrWalletConnectTransactionViewModel)
     case tokenScriptTransaction(TokenScriptTransactionViewModel)
@@ -14,30 +18,42 @@ enum TransactionConfirmationViewModel {
 
     init(configurator: TransactionConfigurator, configuration: TransactionConfirmationConfiguration) {
         switch configuration {
-        case .tokenScriptTransaction(_, let contract, _, let functionCallMetaData, let ethPrice):
-            self = .tokenScriptTransaction(.init(address: contract, configurator: configurator, functionCallMetaData: functionCallMetaData, ethPrice: ethPrice))
-        case .dappTransaction(_, _, let ethPrice):
-            self = .dappOrWalletConnectTransaction(.init(configurator: configurator, ethPrice: ethPrice, dappRequesterViewModel: nil))
-        case .walletConnect(_, _, let ethPrice, let dappRequesterViewModel):
-            self = .dappOrWalletConnectTransaction(.init(configurator: configurator, ethPrice: ethPrice, dappRequesterViewModel: dappRequesterViewModel))
-        case .sendFungiblesTransaction(_, _, let assetDefinitionStore, let amount, let ethPrice):
+        case .tokenScriptTransaction(_, let contract, _, let functionCallMetaData):
+            self = .tokenScriptTransaction(.init(address: contract, configurator: configurator, functionCallMetaData: functionCallMetaData))
+        case .dappTransaction(_, _):
+            self = .dappOrWalletConnectTransaction(.init(configurator: configurator, dappRequesterViewModel: nil))
+        case .walletConnect(_, _, let dappRequesterViewModel):
+            self = .dappOrWalletConnectTransaction(.init(configurator: configurator, dappRequesterViewModel: dappRequesterViewModel))
+        case .sendFungiblesTransaction(_, _, let assetDefinitionStore, let amount):
             let resolver = RecipientResolver(address: configurator.transaction.recipient)
-            self = .sendFungiblesTransaction(.init(configurator: configurator, assetDefinitionStore: assetDefinitionStore, recipientResolver: resolver, amount: amount, ethPrice: ethPrice))
-        case .sendNftTransaction(_, _, let ethPrice, let tokenInstanceNames):
+            self = .sendFungiblesTransaction(.init(configurator: configurator, assetDefinitionStore: assetDefinitionStore, recipientResolver: resolver, amount: amount))
+        case .sendNftTransaction(_, _, let tokenInstanceNames):
             let resolver = RecipientResolver(address: configurator.transaction.recipient)
-            self = .sendNftTransaction(.init(configurator: configurator, recipientResolver: resolver, ethPrice: ethPrice, tokenInstanceNames: tokenInstanceNames))
-        case .claimPaidErc875MagicLink(_, _, let price, let ethPrice, let numberOfTokens):
-            self = .claimPaidErc875MagicLink(.init(configurator: configurator, price: price, ethPrice: ethPrice, numberOfTokens: numberOfTokens))
-        case .speedupTransaction(_, let ethPrice):
-            self = .speedupTransaction(.init(configurator: configurator, ethPrice: ethPrice))
-        case .cancelTransaction(_, let ethPrice):
-            self = .cancelTransaction(.init(configurator: configurator, ethPrice: ethPrice))
+            self = .sendNftTransaction(.init(configurator: configurator, recipientResolver: resolver, tokenInstanceNames: tokenInstanceNames))
+        case .claimPaidErc875MagicLink(_, _, let price, let numberOfTokens):
+            self = .claimPaidErc875MagicLink(.init(configurator: configurator, price: price, numberOfTokens: numberOfTokens))
+        case .speedupTransaction(_):
+            self = .speedupTransaction(.init(configurator: configurator))
+        case .cancelTransaction(_):
+            self = .cancelTransaction(.init(configurator: configurator))
         }
     }
 
     enum Action {
         case show
         case hide
+    }
+
+    var cryptoToFiatRateUpdatable: CryptoToFiatRateUpdatable {
+        switch self {
+        case .dappOrWalletConnectTransaction(let viewModel): return viewModel
+        case .tokenScriptTransaction(let viewModel): return viewModel
+        case .sendFungiblesTransaction(let viewModel): return viewModel
+        case .sendNftTransaction(let viewModel): return viewModel
+        case .claimPaidErc875MagicLink(let viewModel): return viewModel
+        case .speedupTransaction(let viewModel): return viewModel
+        case .cancelTransaction(let viewModel): return viewModel
+        }
     }
 
     mutating func showHideSection(_ section: Int) -> Action {
@@ -108,7 +124,7 @@ extension TransactionConfirmationViewModel {
         }
     }
 
-    class SendFungiblesTransactionViewModel: SectionProtocol {
+    class SendFungiblesTransactionViewModel: SectionProtocol, CryptoToFiatRateUpdatable {
         enum Section: Int, CaseIterable {
             case balance
             case network
@@ -148,8 +164,7 @@ extension TransactionConfirmationViewModel {
         let transactionType: TransactionType
         let session: WalletSession
         let recipientResolver: RecipientResolver
-        let ethPrice: Subscribable<Double>
-
+        
         var server: RPCServer {
             configurator.session.server
         }
@@ -158,14 +173,13 @@ extension TransactionConfirmationViewModel {
             Section.allCases
         }
 
-        init(configurator: TransactionConfigurator, assetDefinitionStore: AssetDefinitionStore, recipientResolver: RecipientResolver, amount: FungiblesTransactionAmount, ethPrice: Subscribable<Double>) {
+        init(configurator: TransactionConfigurator, assetDefinitionStore: AssetDefinitionStore, recipientResolver: RecipientResolver, amount: FungiblesTransactionAmount) {
             self.configurator = configurator
             self.transactionType = configurator.transaction.transactionType
             self.session = configurator.session
             self.assetDefinitionStore = assetDefinitionStore
             self.recipientResolver = recipientResolver
             self.amount = amount
-            self.ethPrice = ethPrice
         }
 
         func updateBalance(_ value: UpdateBalanceValue) {
@@ -220,7 +234,7 @@ extension TransactionConfirmationViewModel {
                 } else {
                     return "\(amount.value) \(token.symbol)"
                 }
-            case .erc875Token, .erc875TokenOrder, .erc721Token, .erc721ForTicketToken, .erc1155Token, .dapp, .tokenScript, .claimPaidErc875MagicLink:
+            case .erc875Token, .erc875TokenOrder, .erc721Token, .erc721ForTicketToken, .erc1155Token, .dapp, .tokenScript, .claimPaidErc875MagicLink, .prebuilt:
                 return String()
             }
         }
@@ -266,7 +280,7 @@ extension TransactionConfirmationViewModel {
             let headerName = sections[section].title
             switch sections[section] {
             case .network:
-                return .init(title: .normal(session.server.displayName), headerName: headerName, titleIcon: session.server.iconImage, configuration: configuration)
+                return .init(title: .normal(session.server.displayName), headerName: headerName, titleIcon: .init(session.server.iconImage), configuration: configuration)
             case .balance:
                 let title = R.string.localizable.tokenTransactionConfirmationDefault()
                 return .init(title: .normal(balance ?? title), headerName: headerName, details: newBalance, configuration: configuration)
@@ -285,7 +299,7 @@ extension TransactionConfirmationViewModel {
         }
     }
 
-    class DappOrWalletConnectTransactionViewModel: SectionProtocol {
+    class DappOrWalletConnectTransactionViewModel: SectionProtocol, CryptoToFiatRateUpdatable {
         enum Section {
             case gas
             case network
@@ -332,7 +346,6 @@ extension TransactionConfirmationViewModel {
             }
         }
 
-        let ethPrice: Subscribable<Double>
         let functionCallMetaData: DecodedFunctionCall?
         var cryptoToDollarRate: Double?
         var openedSections = Set<Int>()
@@ -357,9 +370,8 @@ extension TransactionConfirmationViewModel {
 
         private var dappRequesterViewModel: WalletConnectDappRequesterViewModel?
 
-        init(configurator: TransactionConfigurator, ethPrice: Subscribable<Double>, dappRequesterViewModel: WalletConnectDappRequesterViewModel?) {
+        init(configurator: TransactionConfigurator, dappRequesterViewModel: WalletConnectDappRequesterViewModel?) {
             self.configurator = configurator
-            self.ethPrice = ethPrice
             self.functionCallMetaData = configurator.transaction.data.flatMap { DecodedFunctionCall(data: $0) }
             self.session = configurator.session
             self.dappRequesterViewModel = dappRequesterViewModel
@@ -370,7 +382,7 @@ extension TransactionConfirmationViewModel {
             let headerName = sections[section].title
             switch sections[section] {
             case .network:
-                return .init(title: .normal(session.server.displayName), headerName: headerName, titleIcon: session.server.iconImage, configuration: configuration)
+                return .init(title: .normal(session.server.displayName), headerName: headerName, titleIcon: .init(session.server.iconImage), configuration: configuration)
             case .gas:
                 let gasFee = gasFeeString(withConfigurator: configurator, cryptoToDollarRate: cryptoToDollarRate)
                 if let warning = configurator.gasPriceWarning {
@@ -390,7 +402,7 @@ extension TransactionConfirmationViewModel {
         }
     }
 
-    class TokenScriptTransactionViewModel: SectionProtocol {
+    class TokenScriptTransactionViewModel: SectionProtocol, CryptoToFiatRateUpdatable {
         enum Section: Int, CaseIterable {
             case gas
             case network
@@ -434,7 +446,6 @@ extension TransactionConfirmationViewModel {
 
         var cryptoToDollarRate: Double?
         let functionCallMetaData: DecodedFunctionCall
-        let ethPrice: Subscribable<Double>
         var openedSections = Set<Int>()
         var sections: [Section] {
             return Section.allCases
@@ -444,11 +455,10 @@ extension TransactionConfirmationViewModel {
         }
         let session: WalletSession
 
-        init(address: AlphaWallet.Address, configurator: TransactionConfigurator, functionCallMetaData: DecodedFunctionCall, ethPrice: Subscribable<Double>) {
+        init(address: AlphaWallet.Address, configurator: TransactionConfigurator, functionCallMetaData: DecodedFunctionCall) {
             self.address = address
             self.configurator = configurator
             self.functionCallMetaData = functionCallMetaData
-            self.ethPrice = ethPrice
             self.session = configurator.session
         }
 
@@ -470,7 +480,7 @@ extension TransactionConfirmationViewModel {
             case .amount:
                 return .init(title: .normal(formattedAmountValue), headerName: headerName, configuration: configuration)
             case .network:
-                return .init(title: .normal(session.server.displayName), headerName: headerName, titleIcon: session.server.iconImage, configuration: configuration)
+                return .init(title: .normal(session.server.displayName), headerName: headerName, titleIcon: .init(session.server.iconImage), configuration: configuration)
             }
         }
 
@@ -479,7 +489,7 @@ extension TransactionConfirmationViewModel {
         }
     }
 
-    class SendNftTransactionViewModel: SectionProtocol {
+    class SendNftTransactionViewModel: SectionProtocol, CryptoToFiatRateUpdatable {
         enum Section: Int, CaseIterable {
             case gas
             case network
@@ -502,7 +512,6 @@ extension TransactionConfirmationViewModel {
 
         private let configurator: TransactionConfigurator
         private let transactionType: TransactionType
-        private let session: WalletSession
         private let tokenInstanceNames: [TokenId: String]
 
         var server: RPCServer {
@@ -518,17 +527,16 @@ extension TransactionConfirmationViewModel {
         var openedSections = Set<Int>()
         let recipientResolver: RecipientResolver
         var cryptoToDollarRate: Double?
-        let ethPrice: Subscribable<Double>
         var sections: [Section] {
             return Section.allCases
         }
+        let session: WalletSession
 
-        init(configurator: TransactionConfigurator, recipientResolver: RecipientResolver, ethPrice: Subscribable<Double>, tokenInstanceNames: [TokenId: String]) {
+        init(configurator: TransactionConfigurator, recipientResolver: RecipientResolver, tokenInstanceNames: [TokenId: String]) {
             self.configurator = configurator
             self.transactionType = configurator.transaction.transactionType
             self.session = configurator.session
             self.recipientResolver = recipientResolver
-            self.ethPrice = ethPrice
             self.tokenInstanceNames = tokenInstanceNames
         }
 
@@ -582,7 +590,7 @@ extension TransactionConfirmationViewModel {
             let headerName = sections[section].title
             switch sections[section] {
             case .network:
-                return .init(title: .normal(session.server.displayName), headerName: headerName, titleIcon: session.server.iconImage, configuration: configuration)
+                return .init(title: .normal(session.server.displayName), headerName: headerName, titleIcon: .init(session.server.iconImage), configuration: configuration)
             case .gas:
                 let gasFee = gasFeeString(withConfigurator: configurator, cryptoToDollarRate: cryptoToDollarRate)
                 if let warning = configurator.gasPriceWarning {
@@ -599,7 +607,7 @@ extension TransactionConfirmationViewModel {
                     }
 
                     return .init(title: .normal(viewModels.first ?? "-"), headerName: headerName, configuration: configuration)
-                case .nativeCryptocurrency, .erc20Token, .erc721Token, .claimPaidErc875MagicLink, .erc875Token, .erc875TokenOrder, .erc721ForTicketToken, .dapp, .tokenScript:
+                case .nativeCryptocurrency, .erc20Token, .erc721Token, .claimPaidErc875MagicLink, .erc875Token, .erc875TokenOrder, .erc721ForTicketToken, .dapp, .tokenScript, .prebuilt:
                     //This is really just for ERC721, but the type system…
                     let tokenId = configurator.transaction.tokenId.flatMap({ String($0) })
                     let title: String
@@ -622,7 +630,7 @@ extension TransactionConfirmationViewModel {
         }
     }
 
-    class ClaimPaidErc875MagicLinkViewModel: SectionProtocol {
+    class ClaimPaidErc875MagicLinkViewModel: SectionProtocol, CryptoToFiatRateUpdatable {
         enum Section: Int, CaseIterable {
             case gas
             case network
@@ -654,7 +662,6 @@ extension TransactionConfirmationViewModel {
         }
 
         var openedSections = Set<Int>()
-        let ethPrice: Subscribable<Double>
         var cryptoToDollarRate: Double?
 
         var server: RPCServer {
@@ -665,10 +672,9 @@ extension TransactionConfirmationViewModel {
             return Section.allCases
         }
 
-        init(configurator: TransactionConfigurator, price: BigUInt, ethPrice: Subscribable<Double>, numberOfTokens: UInt) {
+        init(configurator: TransactionConfigurator, price: BigUInt, numberOfTokens: UInt) {
             self.configurator = configurator
             self.price = price
-            self.ethPrice = ethPrice
             self.numberOfTokens = numberOfTokens
             self.session = configurator.session
         }
@@ -683,7 +689,7 @@ extension TransactionConfirmationViewModel {
             let headerName = sections[section].title
             switch sections[section] {
             case .network:
-                return .init(title: .normal(session.server.displayName), headerName: headerName, titleIcon: session.server.iconImage, configuration: configuration)
+                return .init(title: .normal(session.server.displayName), headerName: headerName, titleIcon: .init(session.server.iconImage), configuration: configuration)
             case .gas:
                 if let warning = configurator.gasPriceWarning {
                     return .init(title: .warning(warning.shortTitle), headerName: headerName, configuration: configuration)
@@ -708,7 +714,7 @@ extension TransactionConfirmationViewModel {
         }
     }
 
-    class SpeedupTransactionViewModel: SectionProtocol {
+    class SpeedupTransactionViewModel: SectionProtocol, CryptoToFiatRateUpdatable {
         enum Section {
             case gas
             case description
@@ -734,7 +740,6 @@ extension TransactionConfirmationViewModel {
             return configurator.selectedConfigurationType.title
         }
         let session: WalletSession
-        let ethPrice: Subscribable<Double>
         var cryptoToDollarRate: Double?
         var openedSections = Set<Int>()
 
@@ -746,9 +751,8 @@ extension TransactionConfirmationViewModel {
             [.gas, .description]
         }
 
-        init(configurator: TransactionConfigurator, ethPrice: Subscribable<Double>) {
+        init(configurator: TransactionConfigurator) {
             self.configurator = configurator
-            self.ethPrice = ethPrice
             self.session = configurator.session
         }
 
@@ -769,7 +773,7 @@ extension TransactionConfirmationViewModel {
         }
     }
 
-    class CancelTransactionViewModel: SectionProtocol {
+    class CancelTransactionViewModel: SectionProtocol, CryptoToFiatRateUpdatable {
         enum Section {
             case gas
             case description
@@ -795,7 +799,6 @@ extension TransactionConfirmationViewModel {
             return configurator.selectedConfigurationType.title
         }
         let session: WalletSession
-        let ethPrice: Subscribable<Double>
         var cryptoToDollarRate: Double?
         var openedSections = Set<Int>()
 
@@ -807,9 +810,8 @@ extension TransactionConfirmationViewModel {
             [.gas, .description]
         }
 
-        init(configurator: TransactionConfigurator, ethPrice: Subscribable<Double>) {
+        init(configurator: TransactionConfigurator) {
             self.configurator = configurator
-            self.ethPrice = ethPrice
             self.session = configurator.session
         }
 

@@ -2,7 +2,6 @@
 
 import Foundation
 import TrustKeystore
-import WalletCore
 
 ///Use an enum as a namespace until Swift has proper namespaces
 public enum AlphaWallet {}
@@ -12,7 +11,7 @@ extension AlphaWallet {
     public enum Address: Hashable, Codable {
         //Computing EIP55 is really slow. Cache needed when we need to create many addresses, like parsing a whole lot of Ethereum event logs
         //there is cases when cache accessing from different treads, fro this case we need to use sync access for it
-        private static var cache: ThreadSafeDictionary<String, AlphaWallet.Address> = .init()
+        private static var cache: AtomicDictionary<String, AlphaWallet.Address> = .init()
 
         case ethereumAddress(eip55String: String)
 
@@ -72,6 +71,10 @@ extension AlphaWallet {
             return Data(hexString: eip55String)!
         }
 
+        public var isNull: Bool {
+            eip55String == "0x0000000000000000000000000000000000000000"
+        }
+
         public func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: Key.self)
             try container.encode(eip55String, forKey: .ethereumAddress)
@@ -85,12 +88,6 @@ extension AlphaWallet {
         public func sameContract(as contract: AlphaWallet.Address) -> Bool {
             return eip55String == contract.eip55String
         }
-    }
-}
-
-extension AlphaWallet.Address {
-    public static func == (lsh: AlphaWallet.Address, rhs: AlphaWallet.Address) -> Bool {
-        return lsh.sameContract(as: rhs)
     }
 }
 

@@ -9,8 +9,7 @@ class BlockscanChat {
         case invalidJson
     }
 
-    private let address: AlphaWallet.Address
-
+    let address: AlphaWallet.Address
     var lastKnownCount: Int?
 
     init(address: AlphaWallet.Address) {
@@ -18,6 +17,7 @@ class BlockscanChat {
     }
 
     func fetchUnreadCount() -> Promise<Int> {
+        infoLog("[BlockscanChat] Fetching unread count for \(address.eip55String)…")
         let url = Constants.BlockscanChat.unreadCountEndpoint.appendingPathComponent(address.eip55String)
         return firstly {
             Alamofire.request(url, headers: ["PROXY_KEY": Constants.Credentials.blockscanChatProxyKey]).validate().responseJSON(options: [])
@@ -27,6 +27,7 @@ class BlockscanChat {
             let count = json["result"].intValue
             if let strongSelf = self {
                 strongSelf.lastKnownCount = count
+                infoLog("[BlockscanChat] Fetched unread count for \(strongSelf.address.eip55String) count: \(count)")
             } else {
                 //no-op
             }

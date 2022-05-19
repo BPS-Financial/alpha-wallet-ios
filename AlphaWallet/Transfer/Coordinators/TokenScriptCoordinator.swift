@@ -24,7 +24,6 @@ class TokenScriptCoordinator: Coordinator {
     private let keystore: Keystore
     private let tokenObject: TokenObject
     private let session: WalletSession
-    private let ethPrice: Subscribable<Double>
     private let assetDefinitionStore: AssetDefinitionStore
     private let analyticsCoordinator: AnalyticsCoordinator
     private let tokenHolder: TokenHolder
@@ -32,10 +31,12 @@ class TokenScriptCoordinator: Coordinator {
     private let action: TokenInstanceAction
     private let tokensStorage: TokensDataStore
     private let eventsDataStore: NonActivityEventsDataStore
+    private var lastViewControllerInNavigationStack: UIViewController?
+    private var cancelable = Set<AnyCancellable>()
+
     weak var delegate: TokenScriptCoordinatorDelegate?
     let navigationController: UINavigationController
     var coordinators: [Coordinator] = []
-    private var cancelable = Set<AnyCancellable>()
 
     init(
             session: WalletSession,
@@ -43,7 +44,6 @@ class TokenScriptCoordinator: Coordinator {
             keystore: Keystore,
             tokenHolder: TokenHolder,
             tokensStorage: TokensDataStore,
-            ethPrice: Subscribable<Double>,
             tokenObject: TokenObject,
             assetDefinitionStore: AssetDefinitionStore,
             analyticsCoordinator: AnalyticsCoordinator,
@@ -56,12 +56,12 @@ class TokenScriptCoordinator: Coordinator {
         self.session = session
         self.keystore = keystore
         self.navigationController = navigationController
-        self.ethPrice = ethPrice
         self.tokenObject = tokenObject
         self.assetDefinitionStore = assetDefinitionStore
         self.analyticsCoordinator = analyticsCoordinator
         self.tokensStorage = tokensStorage
         navigationController.navigationBar.isTranslucent = false
+        self.lastViewControllerInNavigationStack = navigationController.viewControllers.last
     }
 
     func start() {
@@ -69,8 +69,7 @@ class TokenScriptCoordinator: Coordinator {
         viewController.navigationItem.leftBarButtonItem = UIBarButtonItem.backBarButton(self, selector: #selector(dismiss))
         navigationController.pushViewController(viewController, animated: true)
 
-        refreshUponEthereumEventChanges()
-        refreshUponAssetDefinitionChanges()
+        subscribeForEthereumEventChanges()
     }
 
     @objc private func dismiss() {
@@ -87,27 +86,28 @@ class TokenScriptCoordinator: Coordinator {
         return vc
     }
 
-    private func refreshUponEthereumEventChanges() {
+    private func subscribeForEthereumEventChanges() {
         eventsDataStore
             .recentEvents(forTokenContract: tokenObject.contractAddress)
+            .filter({ changeset in
+                switch changeset {
+                case .update(let events, _, let insertions, let modifications):
+                    return !insertions.map { events[$0] }.isEmpty || !modifications.map { events[$0] }.isEmpty
+                case .initial, .error:
+                    return false
+                }
+            })
+            .receive(on: DispatchQueue.main)
             .sink(receiveValue: { [weak self] _ in
                 self?.viewController.configure()
             }).store(in: &cancelable)
-    }
 
-    private func refreshUponAssetDefinitionChanges() {
-        assetDefinitionStore.subscribeToBodyChanges { [weak self] contract in
-            self?.refreshScreen(forContract: contract)
-        }
-        assetDefinitionStore.subscribeToSignatureChanges { [weak self] contract in
-            self?.refreshScreen(forContract: contract)
-        }
-    }
-
-    private func refreshScreen(forContract contract: AlphaWallet.Address) {
-        guard contract.sameContract(as: tokenObject.contractAddress) else { return }
-
-        viewController.configure()
+        assetDefinitionStore
+            .assetsSignatureOrBodyChange(for: tokenObject.contractAddress)
+            .receive(on: DispatchQueue.main)
+            .sink(receiveValue: { [weak self] _ in
+                self?.viewController.configure()
+            }).store(in: &cancelable)
     }
 }
 
@@ -130,7 +130,7 @@ extension TokenScriptCoordinator: TokenInstanceActionViewControllerDelegate {
 
         switch transactionFunction.makeUnConfirmedTransaction(withTokenObject: tokenObject, tokenId: tokenId, attributeAndValues: values, localRefs: localRefs, server: server, session: session) {
         case .success((let transaction, let functionCallMetaData)):
-            let coordinator = TransactionConfirmationCoordinator(presentingViewController: navigationController, session: session, transaction: transaction, configuration: .tokenScriptTransaction(confirmType: .signThenSend, contract: contract, keystore: keystore, functionCallMetaData: functionCallMetaData, ethPrice: ethPrice), analyticsCoordinator: analyticsCoordinator)
+            let coordinator = TransactionConfirmationCoordinator(presentingViewController: navigationController, session: session, transaction: transaction, configuration: .tokenScriptTransaction(confirmType: .signThenSend, contract: contract, keystore: keystore, functionCallMetaData: functionCallMetaData), analyticsCoordinator: analyticsCoordinator)
             coordinator.delegate = self
             addCoordinator(coordinator)
             coordinator.start(fromSource: .tokenScript)
@@ -163,8 +163,9 @@ extension TokenScriptCoordinator: StaticHTMLViewControllerDelegate {
 extension TokenScriptCoordinator: TransactionConfirmationCoordinatorDelegate {
 
     func coordinator(_ coordinator: TransactionConfirmationCoordinator, didFailTransaction error: AnyError) {
-        //TODO improve error message. Several of this delegate func
-        coordinator.navigationController.displayError(message: error.localizedDescription)
+        UIApplication.shared
+            .presentedViewController(or: navigationController)
+            .displayError(message: error.prettyError)
     }
 
     func didClose(in coordinator: TransactionConfirmationCoordinator) {
@@ -195,10 +196,12 @@ extension TokenScriptCoordinator: TransactionConfirmationCoordinatorDelegate {
 }
 
 extension TokenScriptCoordinator: TransactionInProgressCoordinatorDelegate {
-    func transactionInProgressDidDismiss(in coordinator: TransactionInProgressCoordinator) {
+    func didDismiss(in coordinator: TransactionInProgressCoordinator) {
         removeCoordinator(coordinator)
+        
         switch transactionConfirmationResult {
         case .some(let result):
+            let _ = lastViewControllerInNavigationStack.flatMap { navigationController.popToViewController($0, animated: true) }
             delegate?.didFinish(result, in: self)
         case .none:
             break
